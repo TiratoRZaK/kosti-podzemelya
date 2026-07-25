@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Кости Подземелья — прототип</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Rubik:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0e0a14; --panel:#1c1428; --panel2:#241a33;
+  --cell:#241b36; --cell-br:#392a52;
+  --bone:#ead9b6; --bone-dk:#b09a6e; --bone-ink:#2b2114;
+  --blood:#7e2030; --blood-dk:#4d1220; --blood-ink:#f3d3c4;
+  --gold:#d9a13c; --gold-lt:#f0c469;
+  --cyan:#62c3c9; --danger:#e14b4b;
+  --text:#e8e0d0; --muted:#8d81a3;
+}
+*{box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent;}
+html,body{height:100%;}
+body{
+  background:radial-gradient(120% 90% at 50% 0%, #1b1229 0%, var(--bg) 70%);
+  color:var(--text); font-family:Rubik,system-ui,sans-serif;
+  touch-action:manipulation; overflow-x:hidden;
+  -webkit-user-select:none; user-select:none;
+  -webkit-touch-callout:none;
+  -webkit-text-size-adjust:100%;
+}
+.pixel{font-family:'Press Start 2P',Rubik,monospace;}
+#app{
+  max-width:430px; margin:0 auto; display:flex; flex-direction:column; gap:10px;
+  min-height:100%; min-height:100dvh;
+  padding:calc(10px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+}
+
+/* ---------- top: title + enemy ---------- */
+#title{text-align:center; font-size:13px; letter-spacing:2px; color:var(--gold); text-shadow:0 3px 0 #000; padding-top:4px;}
+#title small{display:block; font-family:Rubik; font-size:11px; letter-spacing:1px; color:var(--muted); margin-top:5px; text-transform:uppercase;}
+.zone{background:var(--panel); border:2px solid #2e2244; border-radius:12px; padding:8px 10px;}
+.zone-row{display:flex; align-items:center; justify-content:space-between; gap:8px;}
+.who{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); font-weight:700;}
+.hearts{font-size:15px; letter-spacing:2px;}
+.hearts .on{color:var(--danger);} .hearts .off{color:#3a2b42;}
+.score{font-size:15px; color:var(--gold-lt);}
+.deckcount{font-size:11px; color:var(--muted);}
+#eHand{display:flex; gap:5px; margin-top:6px;}
+.mini{width:22px; height:22px; border-radius:5px; background:linear-gradient(#3a2140,#241326); border:2px solid #4d2c47;}
+
+/* ---------- turn bar ---------- */
+#turnbar{display:flex; justify-content:space-between; align-items:center; padding:2px 4px; min-height:22px;}
+#turninfo{font-size:10px; color:var(--muted);}
+#whose{font-size:10px;}
+#whose.me{color:var(--gold-lt);} #whose.foe{color:var(--danger);}
+
+/* ---------- board ---------- */
+#board{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;}
+.cell{
+  border-radius:12px; position:relative;
+  background:linear-gradient(160deg,#2a2040,#1e1630);
+  border:3px solid var(--cell-br);
+  box-shadow:inset 0 4px 10px rgba(0,0,0,.5);
+  transition:border-color .15s, box-shadow .15s;
+}
+.cell::before{content:''; display:block; padding-top:100%;}
+.cell.valid{border-color:var(--gold); box-shadow:0 0 12px rgba(217,161,60,.35), inset 0 4px 10px rgba(0,0,0,.5); cursor:pointer;}
+.cell.valid.hasdie{border-color:var(--danger); box-shadow:0 0 12px rgba(225,75,75,.45), inset 0 4px 10px rgba(0,0,0,.5);}
+.cell.boom{animation:boom .6s ease;}
+@keyframes boom{0%{background:#ffca7a;} 30%{background:#e14b4b;} 100%{background:linear-gradient(160deg,#2a2040,#1e1630);}}
+
+.die{
+  position:absolute; top:9%; left:9%;
+  width:82%; height:82%; border-radius:12px;
+  display:flex; align-items:center; justify-content:center;
+}
+.die .val{font-size:22px;}
+.die.p{background:linear-gradient(150deg,var(--bone),#cdb789); border:3px solid var(--bone-dk); color:var(--bone-ink); box-shadow:0 4px 0 #7d6b47, inset 0 2px 0 #fff5da;}
+.die.e{background:linear-gradient(150deg,#93283a,var(--blood)); border:3px solid var(--blood-dk); color:var(--blood-ink); box-shadow:0 4px 0 #330c17, inset 0 2px 0 #b04355;}
+.die .badge{position:absolute; top:-7px; right:-7px; font-size:13px; filter:drop-shadow(0 2px 1px rgba(0,0,0,.6));}
+.die .sh{position:absolute; bottom:-7px; left:-7px; font-size:10px; background:#0d3b40; color:var(--cyan); border:2px solid var(--cyan); border-radius:8px; padding:1px 4px; font-weight:700;}
+.die.shielded{outline:2px solid var(--cyan); outline-offset:2px;}
+.die.pop{animation:pop .25s ease;}
+@keyframes pop{0%{transform:scale(.55);} 70%{transform:scale(1.1);} 100%{transform:scale(1);}}
+
+/* ---------- info strip ---------- */
+#selinfo{min-height:34px; font-size:12.5px; color:var(--muted); text-align:center; padding:4px 8px; line-height:1.35;}
+#selinfo b{color:var(--text);}
+
+/* ---------- player zone ---------- */
+#pHand{display:flex; gap:10px; justify-content:center; margin-top:8px;}
+.hdie{
+  width:76px; height:76px; border-radius:12px; position:relative; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(150deg,var(--bone),#cdb789); border:3px solid var(--bone-dk); color:var(--bone-ink);
+  box-shadow:0 5px 0 #7d6b47, inset 0 2px 0 #fff5da;
+  transition:transform .12s;
+}
+.hdie .val{font-size:24px;}
+.hdie .badge{position:absolute; top:-8px; right:-8px; font-size:15px; filter:drop-shadow(0 2px 1px rgba(0,0,0,.6));}
+.hdie.sel{transform:translateY(-8px); outline:3px solid var(--gold); outline-offset:2px;}
+.hdie:active{transform:scale(.95);}
+.hdie.disabled{opacity:.45; pointer-events:none;}
+
+/* ---------- toast & banner ---------- */
+#toast{
+  min-height:20px; text-align:center; font-size:12.5px; color:var(--gold-lt);
+  transition:opacity .3s; padding:0 6px;
+}
+#toast.foe{color:#e88;}
+#banner{
+  position:fixed; left:50%; top:38%; transform:translate(-50%,-50%) scale(.8);
+  font-size:17px; color:var(--gold-lt); text-shadow:0 4px 0 #000, 0 0 24px rgba(217,161,60,.8);
+  opacity:0; pointer-events:none; z-index:40; white-space:nowrap;
+}
+#banner.show{animation:bann 1.3s ease;}
+@keyframes bann{0%{opacity:0; transform:translate(-50%,-50%) scale(.6);} 20%{opacity:1; transform:translate(-50%,-50%) scale(1.15);} 40%{transform:translate(-50%,-50%) scale(1);} 80%{opacity:1;} 100%{opacity:0;}}
+
+/* ---------- overlay ---------- */
+#overlay,#rules{
+  position:fixed; inset:0; background:rgba(8,5,14,.86); z-index:50;
+  display:none; align-items:center; justify-content:center; padding:20px;
+}
+#overlay.show,#rules.show{display:flex;}
+.panel{
+  background:var(--panel2); border:3px solid var(--cell-br); border-radius:16px;
+  padding:24px 20px; max-width:360px; width:100%; text-align:center;
+  box-shadow:0 12px 40px rgba(0,0,0,.7);
+}
+.panel h2{font-size:15px; color:var(--gold-lt); margin-bottom:14px; line-height:1.6;}
+.panel p{font-size:14px; color:var(--text); margin-bottom:18px; line-height:1.5;}
+.btn{
+  font-family:'Press Start 2P',monospace; font-size:11px; color:#1d1206;
+  background:linear-gradient(180deg,var(--gold-lt),var(--gold)); border:none; border-radius:10px;
+  padding:13px 20px; cursor:pointer; box-shadow:0 4px 0 #8a611e;
+}
+.btn:active{transform:translateY(2px); box-shadow:0 2px 0 #8a611e;}
+.btn.ghost{background:none; color:var(--muted); box-shadow:none; font-family:Rubik; font-size:13px; padding:10px;}
+#rules .panel{text-align:left; max-height:82vh; overflow-y:auto;}
+#rules h3{font-size:12px; color:var(--gold-lt); margin:14px 0 8px;}
+#rules li{font-size:13px; line-height:1.55; margin:5px 0 5px 18px; color:var(--text);}
+#rules .c{color:var(--gold-lt);}
+#footerbtns{display:flex; justify-content:center; gap:8px;}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important; transition:none !important;}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="title" class="pixel">КОСТИ ПОДЗЕМЕЛЬЯ<small>прототип механики</small></div>
+
+  <div class="zone">
+    <div class="zone-row">
+      <span class="who">Враг</span>
+      <span class="hearts" id="eHearts"></span>
+      <span class="score pixel" id="eScore">0</span>
+    </div>
+    <div class="zone-row">
+      <div id="eHand"></div>
+      <span class="deckcount" id="eDeck"></span>
+    </div>
+  </div>
+
+  <div id="turnbar">
+    <span id="turninfo" class="pixel"></span>
+    <span id="whose" class="pixel"></span>
+  </div>
+
+  <div id="board"></div>
+
+  <div id="selinfo"></div>
+  <div id="toast"></div>
+
+  <div class="zone">
+    <div class="zone-row">
+      <span class="who">Ты</span>
+      <span class="hearts" id="pHearts"></span>
+      <span class="score pixel" id="pScore">0</span>
+    </div>
+    <div id="pHand"></div>
+    <div class="zone-row" style="margin-top:8px;">
+      <span class="deckcount" id="pDeck"></span>
+      <button class="btn ghost" onclick="document.getElementById('rules').classList.add('show')">Правила и очки</button>
+    </div>
+  </div>
+</div>
+
+<div id="banner" class="pixel"></div>
+
+<div id="overlay">
+  <div class="panel">
+    <h2 class="pixel" id="ovTitle"></h2>
+    <p id="ovText"></p>
+    <button class="btn" id="ovBtn"></button>
+  </div>
+</div>
+
+<div id="rules">
+  <div class="panel">
+    <h2 class="pixel">Правила</h2>
+    <h3 class="pixel">Ход</h3>
+    <li>Выбери куб в руке, поставь на пустую клетку или съешь вражеский.</li>
+    <li>Базовый куб ест только куб со значением <b>≤ своего</b>: шестёрка ест всех, единица — только единицу.</li>
+    <li>В раунде у каждого 6 ходов. Больше очков — забираешь у врага ♥.</li>
+    <h3 class="pixel">Очки за ход</h3>
+    <li><span class="c">Съедение</span>: значение съеденного куба</li>
+    <li><span class="c">Поле</span>: сумма значений твоих кубов на поле</li>
+    <li><span class="c">Комбо</span> из твоих кубов: пара +5, две пары +10, сет +15, фулл-хаус +25, каре +40, пятёрка +60, шестёрка +100</li>
+    <h3 class="pixel">Особые кубы</h3>
+    <li>🛡 <b>Щит</b> — 2 вражеских хода его нельзя съесть</li>
+    <li>🦷 <b>Челюсть</b> — при выставлении съедает вражеский куб справа</li>
+    <li>🦔 <b>Шипы</b> — скрыт; съевший теряет 10 очков</li>
+    <li>💣 <b>Мина</b> — скрыта; уничтожает себя и атакующего, ход сгорает</li>
+    <li>🤝 <b>Дружелюбный</b> — прибавляет к себе значение лучшего соседа</li>
+    <li>🔮 <b>Колдун</b> — ест любой куб и копирует его значение</li>
+    <p style="margin-top:16px; text-align:center;"><button class="btn" onclick="document.getElementById('rules').classList.remove('show')">Понятно</button></p>
+  </div>
+</div>
+
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const COLS=3, CELLS=6, MOVES=6, LIVES=3;
+
+const TYPES={
+  basic:   {icon:'',  name:'Базовый',      desc:'Ест куб со значением ≤ своего.'},
+  shield:  {icon:'🛡', name:'Щит',          desc:'2 вражеских хода защищён от съедения.'},
+  spikes:  {icon:'🦔', name:'Шипы',         desc:'Скрыт от врага. Съевший теряет 10 очков.', hidden:true},
+  mine:    {icon:'💣', name:'Мина',         desc:'Скрыта. Взрывает себя и атакующего, ход сгорает.', hidden:true},
+  jaw:     {icon:'🦷', name:'Челюсть',      desc:'При выставлении съедает вражеский куб справа.'},
+  friendly:{icon:'🤝', name:'Дружелюбный',  desc:'Прибавляет к себе значение лучшего соседа.'},
+  warlock: {icon:'🔮', name:'Колдун',       desc:'Ест любой куб и копирует его значение.'}
+};
+const WEIGHTS=[['basic',50],['shield',9],['spikes',9],['mine',7],['jaw',9],['friendly',8],['warlock',8]];
+
+let S=null, sel=null, busy=false, fx={placed:-1,boom:[]};
+
+function rnd(n){return Math.floor(Math.random()*n);}
+function pickType(){
+  let t=rnd(100), acc=0;
+  for(const [k,w] of WEIGHTS){acc+=w; if(t<acc)return k;}
+  return 'basic';
+}
+function makeDeck(){
+  const d=[];
+  for(let i=0;i<10;i++)d.push({value:1+rnd(6), type:pickType()});
+  return d;
+}
+
+/* ---------------- game flow ---------------- */
+function newGame(){
+  S={round:0, pLives:LIVES, eLives:LIVES, firstP:true};
+  newRound();
+}
+function newRound(){
+  S.round++;
+  S.board=Array(CELLS).fill(null);
+  S.pScore=0; S.eScore=0; S.pMoves=0; S.eMoves=0;
+  S.pDeck=makeDeck(); S.eDeck=makeDeck();
+  S.pHand=[]; S.eHand=[];
+  for(let i=0;i<3;i++){S.pHand.push(S.pDeck.pop()); S.eHand.push(S.eDeck.pop());}
+  S.turn=S.firstP?'p':'e';
+  S.firstP=!S.firstP;
+  sel=null; busy=(S.turn==='e');
+  fx={placed:-1,boom:[]};
+  render();
+  banner('РАУНД '+S.round);
+  toast('');
+  if(S.turn==='e')setTimeout(enemyTurn,1200);
+}
+
+function moves(o){return o==='p'?S.pMoves:S.eMoves;}
+function incMoves(o){if(o==='p')S.pMoves++;else S.eMoves++;}
+
+function neighbors(i){
+  const r=Math.floor(i/COLS), c=i%COLS, res=[];
+  if(c>0)res.push(i-1); if(c<COLS-1)res.push(i+1);
+  if(r>0)res.push(i-COLS); if(i+COLS<CELLS)res.push(i+COLS);
+  return res;
+}
+function maxNeighborVal(board,i){
+  let m=0;
+  neighbors(i).forEach(j=>{if(board[j]&&board[j].v>m)m=board[j].v;});
+  return m;
+}
+function legalTargets(die,owner){
+  const res=[];
+  S.board.forEach((c,i)=>{
+    if(!c){res.push(i);return;}
+    if(c.owner===owner)return;
+    if(c.shield>0)return;
+    if(die.type==='warlock'||die.value>=c.v)res.push(i);
+  });
+  return res;
+}
+function hasLegal(owner){
+  const hand=owner==='p'?S.pHand:S.eHand;
+  return hand.some(d=>legalTargets(d,owner).length>0);
+}
+function ownerVals(board,owner){return board.filter(c=>c&&c.owner===owner).map(c=>c.v);}
+function boardSum(board,owner){return ownerVals(board,owner).reduce((a,b)=>a+b,0);}
+function comboBonus(vals){
+  const cnt={}; vals.forEach(v=>cnt[v]=(cnt[v]||0)+1);
+  const c=Object.values(cnt).sort((a,b)=>b-a);
+  if(!c.length)return{b:0,n:null};
+  if(c[0]>=6)return{b:100,n:'ШЕСТЁРКА!'};
+  if(c[0]===5)return{b:60,n:'ПЯТЁРКА!'};
+  if(c[0]===4)return{b:40,n:'КАРЕ!'};
+  if(c[0]===3&&c[1]>=2)return{b:25,n:'ФУЛЛ-ХАУС!'};
+  if(c[0]===3)return{b:15,n:'СЕТ!'};
+  if(c[0]===2&&c[1]>=2)return{b:10,n:'ДВЕ ПАРЫ'};
+  if(c[0]===2)return{b:5,n:'ПАРА'};
+  return{b:0,n:null};
+}
+
+function doMove(owner,handIdx,cellIdx){
+  const hand=owner==='p'?S.pHand:S.eHand;
+  const deck=owner==='p'?S.pDeck:S.eDeck;
+  const die=hand.splice(handIdx,1)[0];
+  if(deck.length)hand.push(deck.pop());
+
+  fx={placed:-1,boom:[]};
+  let eatPts=0, spikesHit=0, mined=false;
+  const notes=[];
+  const target=S.board[cellIdx];
+  const piece={v:die.value, type:die.type, owner, shield:die.type==='shield'?2:0};
+
+  if(target){
+    if(target.type==='mine'){
+      S.board[cellIdx]=null; mined=true; fx.boom.push(cellIdx);
+      notes.push('💣 МИНА! Оба куба уничтожены, ход сгорел');
+    }else{
+      if(die.type==='warlock'){piece.v=target.v; notes.push('🔮 колдун стал '+target.v);}
+      eatPts+=target.v;
+      if(target.type==='spikes'){spikesHit+=10; notes.push('🦔 шипы −10');}
+      S.board[cellIdx]=piece; fx.placed=cellIdx;
+    }
+  }else{
+    S.board[cellIdx]=piece; fx.placed=cellIdx;
+  }
+
+  if(!mined){
+    if(die.type==='friendly'){
+      const mv=maxNeighborVal(S.board.map((c,j)=>j===cellIdx?null:c),cellIdx);
+      if(mv>0){piece.v=Math.min(piece.v+mv,12); notes.push('🤝 +'+mv+' от соседа');}
+    }
+    if(die.type==='jaw'&&cellIdx%COLS<COLS-1){
+      const j=cellIdx+1, t2=S.board[j];
+      if(t2&&t2.owner!==owner&&!(t2.shield>0)){
+        if(t2.type==='mine'){
+          S.board[j]=null; S.board[cellIdx]=null; mined=true;
+          fx.boom.push(j,cellIdx); fx.placed=-1;
+          notes.length=0; notes.push('💣 Челюсть напоролась на мину! Ход сгорел');
+        }else{
+          eatPts+=t2.v;
+          if(t2.type==='spikes'){spikesHit+=10; notes.push('🦔 шипы −10');}
+          S.board[j]=null; notes.push('🦷 челюсть съела '+t2.v);
+        }
+      }
+    }
+  }
+
+  // shields of the OTHER player burn down after this move
+  S.board.forEach(c=>{if(c&&c.owner!==owner&&c.shield>0)c.shield--;});
+
+  let gain=0; const parts=[];
+  if(!mined){
+    if(eatPts){gain+=eatPts; parts.push('съедение +'+eatPts);}
+    const bs=boardSum(S.board,owner);
+    if(bs){gain+=bs; parts.push('поле +'+bs);}
+    const cb=comboBonus(ownerVals(S.board,owner));
+    if(cb.b){gain+=cb.b; parts.push(cb.n.toLowerCase().replace('!','')+' +'+cb.b);
+      if(cb.b>=15)banner(cb.n+' +'+cb.b);}
+    if(spikesHit)parts.push('шипы −'+spikesHit);
+  }
+  const delta=gain-spikesHit;
+  if(owner==='p')S.pScore=Math.max(0,S.pScore+delta);
+  else S.eScore=Math.max(0,S.eScore+delta);
+
+  incMoves(owner);
+  sel=null;
+  render();
+  const txt=mined?notes.join(' · '):
+    (parts.length?parts.join(' · '):'без очков')+(notes.length?' · '+notes.join(' · '):'');
+  toast((owner==='p'?'Ты: ':'Враг: ')+txt, owner==='e');
+  setTimeout(advance, 900);
+}
+
+function advance(){
+  if(S.pMoves>=MOVES&&S.eMoves>=MOVES){endRound();return;}
+  let next=S.turn==='p'?'e':'p';
+  if(moves(next)>=MOVES)next=S.turn;
+  S.turn=next;
+  if(!hasLegal(next)){
+    toast(next==='p'?'У тебя нет ходов — пас':'У врага нет ходов — пас', next==='e');
+    incMoves(next); render();
+    setTimeout(advance,800); return;
+  }
+  busy=(next==='e');
+  render();
+  if(next==='e')setTimeout(enemyTurn,1100);
+}
+
+function endRound(){
+  busy=true;
+  let t,txt;
+  if(S.pScore>S.eScore){S.eLives--; t='РАУНД ТВОЙ!'; txt=S.pScore+' : '+S.eScore+' — враг теряет ♥';}
+  else if(S.eScore>S.pScore){S.pLives--; t='РАУНД ЗА ВРАГОМ'; txt=S.pScore+' : '+S.eScore+' — ты теряешь ♥';}
+  else{t='НИЧЬЯ'; txt=S.pScore+' : '+S.eScore+' — жизни целы';}
+  render();
+  setTimeout(()=>{
+    if(S.pLives<=0)showOverlay('ПОРАЖЕНИЕ','Подземелье забрало твои кости. '+txt,'Сыграть снова',newGame);
+    else if(S.eLives<=0)showOverlay('ПОБЕДА!','Враг повержен! '+txt,'Сыграть снова',newGame);
+    else showOverlay(t,txt,'Следующий раунд',newRound);
+  },700);
+}
+
+/* ---------------- enemy AI ---------------- */
+function evalMove(die,ci,owner){
+  const b=S.board.map(c=>c?{...c}:null);
+  let gain=0;
+  const t=b[ci];
+  const piece={v:die.value,type:die.type,owner,shield:0};
+  if(t){
+    if(die.type==='warlock')piece.v=t.v;
+    gain+=t.v*2;               // eat points + denial bonus (AI не знает про шипы/мины)
+    b[ci]=piece;
+  }else b[ci]=piece;
+  if(die.type==='friendly'){
+    const mv=maxNeighborVal(b.map((c,j)=>j===ci?null:c),ci);
+    piece.v=Math.min(piece.v+mv,12);
+  }
+  if(die.type==='jaw'&&ci%COLS<COLS-1){
+    const t2=b[ci+1];
+    if(t2&&t2.owner!==owner&&!(t2.shield>0)){gain+=t2.v*2; b[ci+1]=null;}
+  }
+  gain+=boardSum(b,owner);
+  gain+=comboBonus(ownerVals(b,owner)).b;
+  return gain;
+}
+function enemyTurn(){
+  if(!S)return;
+  let best=null;
+  S.eHand.forEach((die,hi)=>{
+    legalTargets(die,'e').forEach(ci=>{
+      const sc=evalMove(die,ci,'e')+Math.random()*5;
+      if(!best||sc>best.sc)best={hi,ci,sc};
+    });
+  });
+  if(!best){setTimeout(advance,400);return;}
+  doMove('e',best.hi,best.ci);
+}
+
+/* ---------------- rendering ---------------- */
+function hearts(n){
+  let s='';
+  for(let i=0;i<LIVES;i++)s+='<span class="'+(i<n?'on':'off')+'">♥</span>';
+  return s;
+}
+function dieBadge(piece,viewerIsOwner){
+  const t=TYPES[piece.type];
+  if(!t.icon)return'';
+  if(t.hidden&&!viewerIsOwner)return'';
+  return'<span class="badge">'+t.icon+'</span>';
+}
+function render(){
+  $('pHearts').innerHTML=hearts(S.pLives);
+  $('eHearts').innerHTML=hearts(S.eLives);
+  $('pScore').textContent=S.pScore;
+  $('eScore').textContent=S.eScore;
+  $('pDeck').textContent='Колода: '+S.pDeck.length;
+  $('eDeck').textContent='Колода: '+S.eDeck.length;
+  $('eHand').innerHTML=S.eHand.map(()=>'<div class="mini"></div>').join('');
+  const curMoves=Math.min(moves(S.turn)+1,MOVES);
+  $('turninfo').textContent='РАУНД '+S.round+' · ХОД '+curMoves+'/'+MOVES;
+  const w=$('whose');
+  w.textContent=S.turn==='p'?'ТВОЙ ХОД':'ХОД ВРАГА';
+  w.className=S.turn==='p'?'me':'foe';
+
+  // board
+  const valid=(sel!==null&&!busy)?legalTargets(S.pHand[sel],'p'):[];
+  $('board').innerHTML=S.board.map((c,i)=>{
+    const v=valid.includes(i);
+    let inner='';
+    if(c){
+      const own=c.owner==='p';
+      inner='<div class="die '+(own?'p':'e')+(c.shield>0?' shielded':'')+(fx.placed===i?' pop':'')+'">'
+        +'<span class="val pixel">'+c.v+'</span>'
+        +dieBadge(c,own)
+        +(c.shield>0?'<span class="sh">🛡'+c.shield+'</span>':'')
+        +'</div>';
+    }
+    return'<div class="cell'+(v?' valid':'')+(v&&c?' hasdie':'')+(fx.boom.includes(i)?' boom':'')
+      +'" data-i="'+i+'">'+inner+'</div>';
+  }).join('');
+  fx={placed:-1,boom:[]};
+
+  // hand
+  $('pHand').innerHTML=S.pHand.map((d,i)=>{
+    const t=TYPES[d.type];
+    return'<div class="hdie'+(sel===i?' sel':'')+((busy||S.turn!=='p')?' disabled':'')+'" data-h="'+i+'">'
+      +'<span class="val pixel">'+d.value+'</span>'
+      +(t.icon?'<span class="badge">'+t.icon+'</span>':'')
+      +'</div>';
+  }).join('');
+
+  // selection info
+  if(sel!==null&&S.pHand[sel]){
+    const d=S.pHand[sel], t=TYPES[d.type];
+    $('selinfo').innerHTML='<b>'+t.name+' '+d.value+'</b> — '+t.desc+' Выбери подсвеченную клетку.';
+  }else{
+    $('selinfo').innerHTML=S.turn==='p'?'Выбери куб в руке.':'Враг думает…';
+  }
+
+  bindEvents();
+}
+function bindEvents(){
+  document.querySelectorAll('.hdie').forEach(el=>{
+    el.onclick=()=>{
+      if(busy||S.turn!=='p')return;
+      const i=+el.dataset.h;
+      sel=(sel===i)?null:i;
+      render();
+    };
+  });
+  document.querySelectorAll('.cell').forEach(el=>{
+    el.onclick=()=>{
+      if(busy||S.turn!=='p'||sel===null)return;
+      const i=+el.dataset.i;
+      if(!legalTargets(S.pHand[sel],'p').includes(i))return;
+      busy=true;
+      doMove('p',sel,i);
+    };
+  });
+}
+
+let toastTimer=null;
+function toast(msg,foe){
+  const t=$('toast');
+  t.textContent=msg;
+  t.className=foe?'foe':'';
+}
+function banner(msg){
+  const b=$('banner');
+  b.textContent=msg;
+  b.classList.remove('show');
+  void b.offsetWidth;
+  b.classList.add('show');
+}
+function showOverlay(title,text,btn,cb){
+  $('ovTitle').textContent=title;
+  $('ovText').textContent=text;
+  $('ovBtn').textContent=btn;
+  $('ovBtn').onclick=()=>{$('overlay').classList.remove('show');cb();};
+  $('overlay').classList.add('show');
+}
+
+newGame();
+</script>
+</body>
+</html>
