@@ -273,6 +273,14 @@ body{
   border-radius:4px; font-weight:700; font-size:11.5px;
 }
 
+.hdie.red{
+  background:linear-gradient(150deg,#93283a,var(--blood));
+  border-color:var(--blood-dk); color:var(--blood-ink);
+  box-shadow:0 5px 0 #330c17, inset 0 2px 0 #b04355;
+}
+.hstoggle{display:flex; align-items:center; justify-content:center; gap:9px; margin:2px 0 12px; font-size:13px; color:var(--text); cursor:pointer;}
+.hstoggle input{width:18px; height:18px; accent-color:var(--gold);}
+
 @media (prefers-reduced-motion:reduce){
   *{animation:none !important; transition:none !important;}
 }
@@ -284,7 +292,7 @@ body{
 
   <div class="zone">
     <div class="zone-row">
-      <span class="who">Враг</span>
+      <span class="who" id="whoTop">Враг</span>
       <span class="hearts" id="eHearts"></span>
       <span class="score pixel" id="eScore">0</span>
     </div>
@@ -308,7 +316,7 @@ body{
 
   <div class="zone">
     <div class="zone-row">
-      <span class="who">Ты</span>
+      <span class="who" id="whoBottom">Ты</span>
       <span class="hearts" id="pHearts"></span>
       <span class="score pixel" id="pScore">0</span>
     </div>
@@ -410,6 +418,9 @@ var MODE_ORDER=['classic','big','draft','race','territory','durak'];
 
 var S=null, sel=null, busy=false, fx={placed:-1,boom:[]};
 var draftOffer=[], draftSel=[];
+var hotseat=false;
+
+function pname(o){return S&&S.hotseat?(o==='p'?'Игрок 1':'Игрок 2'):(o==='p'?'Ты':'Враг');}
 
 function rnd(n){return Math.floor(Math.random()*n);}
 function pickType(){
@@ -430,11 +441,17 @@ function showMenu(){
   $('overlay').classList.remove('show');
   $('draftOv').classList.remove('show');
   var list=$('modeList'); list.innerHTML='';
+  var tg=document.createElement('label');
+  tg.className='hstoggle';
+  tg.innerHTML='<input type="checkbox"'+(hotseat?' checked':'')+'> 2 игрока на одном телефоне';
+  tg.querySelector('input').onchange=function(){hotseat=this.checked; showMenu();};
+  list.appendChild(tg);
   MODE_ORDER.forEach(function(k){
     var m=MODES[k];
+    var sub=m.sub+((hotseat&&k==='durak')?' · вдвоём пока нельзя, будет против ИИ':'');
     var b=document.createElement('button');
     b.className='modebtn';
-    b.innerHTML='<div class="mt">'+m.title+'</div><div class="ms">'+m.sub+'</div>';
+    b.innerHTML='<div class="mt">'+m.title+'</div><div class="ms">'+sub+'</div>';
     b.onclick=function(){ $('menu').classList.remove('show'); startMode(k); };
     list.appendChild(b);
   });
@@ -492,11 +509,13 @@ function renderDraft(){
 /* ---------------- match flow ---------------- */
 function initMatch(key, pDeckFull, eDeckFull){
   var cfg=MODES[key];
-  S={modeKey:key, cfg:cfg, token:Math.random(), round:0, firstP:true,
+  S={modeKey:key, cfg:cfg, token:Math.random(), round:0, firstP:true, hotseat:hotseat,
      pScore:0, eScore:0, pTotal:0, eTotal:0, history:[], histSel:-1,
      pHand:[], eHand:[], pDeck:pDeckFull||[], eDeck:eDeckFull||[]};
   if(cfg.kind==='lives'){S.pLives=LIVESMAX; S.eLives=LIVESMAX;}
   if(cfg.kind==='bo3'){S.pWins=0; S.eWins=0;}
+  $('whoTop').textContent=S.hotseat?'Игрок 2':'Враг';
+  $('whoBottom').textContent=S.hotseat?'Игрок 1':'Ты';
   $('modeTag').textContent=cfg.title.toLowerCase();
   newRound();
 }
@@ -522,14 +541,14 @@ function newRound(){
   while(S.eHand.length<3&&S.eDeck.length)S.eHand.push(S.eDeck.pop());
   S.turn=S.firstP?'p':'e';
   S.firstP=!S.firstP;
-  sel=null; busy=(S.turn==='e');
+  sel=null; busy=(S.turn==='e'&&!S.hotseat);
   fx={placed:-1,boom:[]};
   render();
   banner('РАУНД '+S.round);
   toast('');
   S.history=[]; S.histSel=-1;
   renderHistory();
-  if(S.turn==='e')schedule(enemyTurn,1200);
+  if(S.turn==='e'&&!S.hotseat)schedule(enemyTurn,1200);
 }
 
 function moves(o){return o==='p'?S.pMoves:S.eMoves;}
@@ -708,13 +727,13 @@ function advance(){
   if(moves(next)>=M)next=S.turn;
   S.turn=next;
   if(!hasLegal(next)){
-    toast(next==='p'?'У тебя нет ходов — пас':'У врага нет ходов — пас', next==='e');
+    toast(S.hotseat?(pname(next)+': нет ходов — пас'):(next==='p'?'У тебя нет ходов — пас':'У врага нет ходов — пас'), next==='e');
     incMoves(next); render();
     schedule(advance,800); return;
   }
-  busy=(next==='e');
+  busy=(next==='e'&&!S.hotseat);
   render();
-  if(next==='e')schedule(enemyTurn,1100);
+  if(next==='e'&&!S.hotseat)schedule(enemyTurn,1100);
 }
 
 function endRound(){
@@ -723,8 +742,8 @@ function endRound(){
   render();
   if(k==='lives'){
     var t,txt;
-    if(S.pScore>S.eScore){S.eLives--; t='РАУНД ТВОЙ!'; txt=S.pScore+' : '+S.eScore+' — враг теряет ♥';}
-    else if(S.eScore>S.pScore){S.pLives--; t='РАУНД ЗА ВРАГОМ'; txt=S.pScore+' : '+S.eScore+' — ты теряешь ♥';}
+    if(S.pScore>S.eScore){S.eLives--; t=S.hotseat?'РАУНД ЗА ИГРОКОМ 1':'РАУНД ТВОЙ!'; txt=S.pScore+' : '+S.eScore+' — '+(S.hotseat?'Игрок 2 теряет':'враг теряет')+' ♥';}
+    else if(S.eScore>S.pScore){S.pLives--; t=S.hotseat?'РАУНД ЗА ИГРОКОМ 2':'РАУНД ЗА ВРАГОМ'; txt=S.pScore+' : '+S.eScore+' — '+(S.hotseat?'Игрок 1 теряет':'ты теряешь')+' ♥';}
     else{t='НИЧЬЯ'; txt=S.pScore+' : '+S.eScore+' — жизни целы';}
     render();
     if(S.pLives<=0||S.eLives<=0){schedule(matchEnd,700);}
@@ -732,14 +751,16 @@ function endRound(){
   }
   else if(k==='bo3'){
     var msg,sub;
+    var w1=S.hotseat?'РАУНД ЗА ИГРОКОМ 1':'РАУНД ТВОЙ!';
+    var w2=S.hotseat?'РАУНД ЗА ИГРОКОМ 2':'РАУНД ЗА ВРАГОМ';
     if(S.cfg.winBy==='count'){
       var pc=ownerCount(S.board,'p'), ec=ownerCount(S.board,'e');
-      if(pc>ec){S.pWins++; msg='РАУНД ТВОЙ!'; sub='Кубов на поле '+pc+' : '+ec;}
-      else if(ec>pc){S.eWins++; msg='РАУНД ЗА ВРАГОМ'; sub='Кубов на поле '+pc+' : '+ec;}
+      if(pc>ec){S.pWins++; msg=w1; sub='Кубов на поле '+pc+' : '+ec;}
+      else if(ec>pc){S.eWins++; msg=w2; sub='Кубов на поле '+pc+' : '+ec;}
       else{msg='НИЧЬЯ В РАУНДЕ'; sub='Кубов поровну: '+pc+' : '+ec;}
     }else{
-      if(S.pScore>S.eScore){S.pWins++; msg='РАУНД ТВОЙ!'; sub='Счёт '+S.pScore+' : '+S.eScore;}
-      else if(S.eScore>S.pScore){S.eWins++; msg='РАУНД ЗА ВРАГОМ'; sub='Счёт '+S.pScore+' : '+S.eScore;}
+      if(S.pScore>S.eScore){S.pWins++; msg=w1; sub='Счёт '+S.pScore+' : '+S.eScore;}
+      else if(S.eScore>S.pScore){S.eWins++; msg=w2; sub='Счёт '+S.pScore+' : '+S.eScore;}
       else{msg='НИЧЬЯ В РАУНДЕ'; sub='Счёт '+S.pScore+' : '+S.eScore;}
     }
     S.pTotal+=S.pScore; S.eTotal+=S.eScore;
@@ -758,20 +779,22 @@ function endRound(){
 function matchEnd(){
   busy=true;
   var k=S.cfg.kind, title, text;
+  var W1=S.hotseat?'ПОБЕДА ИГРОКА 1!':'ПОБЕДА!';
+  var W2=S.hotseat?'ПОБЕДА ИГРОКА 2!':'ПОРАЖЕНИЕ';
   if(k==='lives'){
-    if(S.pLives<=0){title='ПОРАЖЕНИЕ'; text='Подземелье забрало твои кости.';}
-    else{title='ПОБЕДА!'; text='Враг повержен!';}
+    if(S.pLives<=0){title=W2; text=S.hotseat?'Игрок 1 остался без жизней.':'Подземелье забрало твои кости.';}
+    else{title=W1; text=S.hotseat?'Игрок 2 остался без жизней.':'Враг повержен!';}
   }
   else if(k==='race'){
-    if(S.pScore>=S.cfg.target&&S.pScore>=S.eScore){title='ПОБЕДА!'; text='Ты добежал до '+S.cfg.target+'! Итог '+S.pScore+' : '+S.eScore;}
-    else if(S.eScore>=S.cfg.target){title='ПОРАЖЕНИЕ'; text='Враг добежал первым. Итог '+S.pScore+' : '+S.eScore;}
+    if(S.pScore>=S.cfg.target&&S.pScore>=S.eScore){title=W1; text=(S.hotseat?'Игрок 1 добежал':'Ты добежал')+' до '+S.cfg.target+'! Итог '+S.pScore+' : '+S.eScore;}
+    else if(S.eScore>=S.cfg.target){title=W2; text=(S.hotseat?'Игрок 2 добежал':'Враг добежал')+' первым. Итог '+S.pScore+' : '+S.eScore;}
     else{title='НИЧЬЯ'; text='Итог '+S.pScore+' : '+S.eScore;}
   }
   else{ // bo3
     var res=0;
     if(S.pWins>S.eWins)res=1; else if(S.eWins>S.pWins)res=-1;
     else if(S.pTotal>S.eTotal)res=1; else if(S.eTotal>S.pTotal)res=-1;
-    if(res>0)title='ПОБЕДА!'; else if(res<0)title='ПОРАЖЕНИЕ'; else title='НИЧЬЯ';
+    if(res>0)title=W1; else if(res<0)title=W2; else title='НИЧЬЯ';
     text='Победы '+S.pWins+' : '+S.eWins+' · очки за матч '+S.pTotal+' : '+S.eTotal;
   }
   var key=S.modeKey;
@@ -821,9 +844,11 @@ function enemyTurn(){
 var SUITS=['♠','♥','♦','♣'];
 function initDurak(key){
   var cfg=MODES[key];
-  S={modeKey:key, cfg:cfg, token:Math.random(),
+  S={modeKey:key, cfg:cfg, token:Math.random(), hotseat:false,
      talon:makeDurakDeck(), discard:0, trump:0,
      pHand:[], eHand:[], table:[], attacker:'p', maxAtt:6, phase:'idle'};
+  $('whoTop').textContent='Враг';
+  $('whoBottom').textContent='Ты';
   S.trump=S.talon[0].suit; // нижний куб колоды — козырь
   for(var i=0;i<6;i++){S.pHand.push(S.talon.pop()); S.eHand.push(S.talon.pop());}
   $('modeTag').textContent=cfg.title.toLowerCase();
@@ -1065,18 +1090,19 @@ function renderDurak(){
 
 
 /* ---------------- эффекты и подсказки ---------------- */
-function findHint(){
+function findHint(owner){
   if(S.cfg.kind==='durak')return null;
-  var cur=comboBonus(ownerVals(S.board,'p')).b;
+  var hand=owner==='p'?S.pHand:S.eHand;
+  var cur=comboBonus(ownerVals(S.board,owner)).b;
   var best=null;
-  S.pHand.forEach(function(d,hi){
-    legalTargets(d,'p').forEach(function(ci){
+  hand.forEach(function(d,hi){
+    legalTargets(d,owner).forEach(function(ci){
       var b=S.board.map(function(c){return c?{v:c.v,owner:c.owner}:null;});
       var v=d.value;
       if(b[ci]&&d.type==='warlock')v=b[ci].v;
-      b[ci]={v:v,owner:'p'};
+      b[ci]={v:v,owner:owner};
       if(d.type==='friendly')b[ci].v=Math.min(v+neighborSum(b,ci),12);
-      var cb=comboBonus(ownerVals(b,'p'));
+      var cb=comboBonus(ownerVals(b,owner));
       if(cb.b-cur>=10&&(!best||cb.b>best.b))best={hi:hi,ci:ci,b:cb.b,n:cb.n.replace('!','')};
     });
   });
@@ -1180,7 +1206,7 @@ function renderHistory(){
   }).join('');
   box.innerHTML=strip
     +'<div class="hcard'+(foe?' foe':'')+'">'
-    +'<div class="hhdr"><span class="hwho">'+(foe?'ХОД ВРАГА':'ТВОЙ ХОД')+' '+m.n+'</span>'
+    +'<div class="hhdr"><span class="hwho">'+(foe?(S.hotseat?'ХОД ИГРОКА 2':'ХОД ВРАГА'):(S.hotseat?'ХОД ИГРОКА 1':'ТВОЙ ХОД'))+' '+m.n+'</span>'
     +'<span class="htot'+(m.pts<0?' neg':'')+'">'+(m.mined?'💥 0':Math.abs(m.pts))+'</span></div>'
     +(m.parts.length?'<div class="hchips">'+chips+'</div>':'')
     +'</div>';
@@ -1233,11 +1259,19 @@ function render(){
   var rlabel=(k==='bo3')?('РАУНД '+S.round+'/3'):('РАУНД '+S.round);
   $('turninfo').textContent=rlabel+' · ХОД '+curMoves+'/'+S.cfg.moves;
   var w=$('whose');
-  w.textContent=S.turn==='p'?'ТВОЙ ХОД':'ХОД ВРАГА';
-  w.className=S.turn==='p'?'me':'foe';
+  if(S.hotseat){
+    w.textContent=S.turn==='p'?'ХОД ИГРОКА 1':'ХОД ИГРОКА 2';
+    w.className=S.turn==='p'?'me':'foe';
+  }else{
+    w.textContent=S.turn==='p'?'ТВОЙ ХОД':'ХОД ВРАГА';
+    w.className=S.turn==='p'?'me':'foe';
+  }
 
-  var valid=(sel!==null&&!busy&&S.pHand[sel])?legalTargets(S.pHand[sel],'p'):[];
-  var hint=(!busy&&S.turn==='p')?findHint():null;
+  var actor=S.hotseat?S.turn:'p';
+  var canAct=!busy&&(S.hotseat||S.turn==='p');
+  var aHand=actor==='p'?S.pHand:S.eHand;
+  var valid=(sel!==null&&canAct&&aHand[sel])?legalTargets(aHand[sel],actor):[];
+  var hint=canAct?findHint(actor):null;
   $('board').innerHTML=S.board.map(function(c,i){
     var v=valid.indexOf(i)>=0;
     var hc=hint&&sel===hint.hi&&i===hint.ci;
@@ -1246,7 +1280,7 @@ function render(){
       var own=c.owner==='p';
       inner='<div class="die '+(own?'p':'e')+(c.shield>0?' shielded':'')+(fx.placed===i?' pop':'')+'">'
         +'<span class="val pixel">'+c.v+'</span>'
-        +dieBadge(c,own)
+        +dieBadge(c,c.owner===actor)
         +(c.shield>0?'<span class="sh">🛡'+c.shield+'</span>':'')
         +'</div>';
     }
@@ -1255,9 +1289,9 @@ function render(){
   }).join('');
   fx={placed:-1,boom:[]};
 
-  $('pHand').innerHTML=S.pHand.map(function(d,i){
+  $('pHand').innerHTML=aHand.map(function(d,i){
     var t=TYPES[d.type];
-    return'<div class="hdie'+(sel===i?' sel':'')+(hint&&hint.hi===i?' hint':'')+((busy||S.turn!=='p')?' disabled':'')+'" data-h="'+i+'">'
+    return'<div class="hdie'+(actor==='e'?' red':'')+(sel===i?' sel':'')+(hint&&hint.hi===i?' hint':'')+(!canAct?' disabled':'')+'" data-h="'+i+'">'
       +'<span class="val pixel">'+d.value+'</span>'
       +(t.icon?'<span class="badge">'+t.icon+'</span>':'')
       +'</div>';
@@ -1265,13 +1299,13 @@ function render(){
 
   if(sel!==null&&hint&&sel===hint.hi){
     $('selinfo').innerHTML='<span class="tip">💡 Поставь на светящуюся клетку — <b>'+hint.n+' +'+hint.b+'</b>!</span>';
-  }else if(sel!==null&&S.pHand[sel]){
-    var d=S.pHand[sel], tt=TYPES[d.type];
+  }else if(sel!==null&&aHand[sel]){
+    var d=aHand[sel], tt=TYPES[d.type];
     $('selinfo').innerHTML='<b>'+tt.name+' '+d.value+'</b> — '+tt.desc+' Выбери подсвеченную клетку.';
   }else if(hint){
     $('selinfo').innerHTML='<span class="tip">💡 Светящийся куб соберёт <b>'+hint.n+' +'+hint.b+'</b>!</span>';
   }else{
-    $('selinfo').innerHTML=S.turn==='p'?'Выбери куб в руке.':'Враг думает…';
+    $('selinfo').innerHTML=canAct?'Выбери куб в руке.':(S.hotseat?'Секунду…':'Враг думает…');
   }
   bindEvents();
 }
@@ -1279,7 +1313,7 @@ function bindEvents(){
   var hd=document.querySelectorAll('.hdie');
   for(var a=0;a<hd.length;a++){
     hd[a].onclick=function(){
-      if(busy||S.turn!=='p')return;
+      if(busy||(!S.hotseat&&S.turn!=='p'))return;
       var i=+this.getAttribute('data-h');
       sel=(sel===i)?null:i;
       render();
@@ -1288,11 +1322,14 @@ function bindEvents(){
   var cs=document.querySelectorAll('.cell');
   for(var b=0;b<cs.length;b++){
     cs[b].onclick=function(){
-      if(busy||S.turn!=='p'||sel===null)return;
+      if(busy||sel===null)return;
+      if(!S.hotseat&&S.turn!=='p')return;
+      var actor=S.hotseat?S.turn:'p';
+      var aHand=actor==='p'?S.pHand:S.eHand;
       var i=+this.getAttribute('data-i');
-      if(legalTargets(S.pHand[sel],'p').indexOf(i)<0)return;
+      if(!aHand[sel]||legalTargets(aHand[sel],actor).indexOf(i)<0)return;
       busy=true;
-      doMove('p',sel,i);
+      doMove(actor,sel,i);
     };
   }
 }
