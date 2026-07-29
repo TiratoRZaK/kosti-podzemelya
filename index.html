@@ -43,7 +43,8 @@ body{
 .who{font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--muted); font-weight:700;}
 .hearts{font-size:15px; letter-spacing:2px;}
 .hearts .on{color:var(--danger);} .hearts .off{color:#3a2b42;}
-.score{font-size:15px; color:var(--gold-lt);}
+.hearts .won{color:var(--gold-lt);} .hearts .woff{color:#3a2b42;}
+.score{font-size:14px; color:var(--gold-lt);}
 .deckcount{font-size:11px; color:var(--muted);}
 #eHand{display:flex; gap:5px; margin-top:6px;}
 .mini{width:22px; height:22px; border-radius:5px; background:linear-gradient(#3a2140,#241326); border:2px solid #4d2c47;}
@@ -88,7 +89,7 @@ body{
 #selinfo b{color:var(--text);}
 
 /* ---------- player zone ---------- */
-#pHand{display:flex; gap:10px; justify-content:center; margin-top:8px;}
+#pHand{display:flex; gap:10px; justify-content:center; margin-top:8px; min-height:76px;}
 .hdie{
   width:76px; height:76px; border-radius:12px; position:relative; cursor:pointer;
   display:flex; align-items:center; justify-content:center;
@@ -103,10 +104,7 @@ body{
 .hdie.disabled{opacity:.45; pointer-events:none;}
 
 /* ---------- toast & banner ---------- */
-#toast{
-  min-height:20px; text-align:center; font-size:12.5px; color:var(--gold-lt);
-  transition:opacity .3s; padding:0 6px;
-}
+#toast{min-height:20px; text-align:center; font-size:12.5px; color:var(--gold-lt); padding:0 6px;}
 #toast.foe{color:#e88;}
 #banner{
   position:fixed; left:50%; top:38%; transform:translate(-50%,-50%) scale(.8);
@@ -116,31 +114,164 @@ body{
 #banner.show{animation:bann 1.3s ease;}
 @keyframes bann{0%{opacity:0; transform:translate(-50%,-50%) scale(.6);} 20%{opacity:1; transform:translate(-50%,-50%) scale(1.15);} 40%{transform:translate(-50%,-50%) scale(1);} 80%{opacity:1;} 100%{opacity:0;}}
 
-/* ---------- overlay ---------- */
-#overlay,#rules{
-  position:fixed; inset:0; background:rgba(8,5,14,.86); z-index:50;
-  display:none; align-items:center; justify-content:center; padding:20px;
+/* ---------- overlays ---------- */
+#overlay,#rules,#menu,#draftOv{
+  position:fixed; inset:0; background:rgba(8,5,14,.9); z-index:50;
+  display:none; align-items:center; justify-content:center; padding:16px;
 }
-#overlay.show,#rules.show{display:flex;}
+#overlay.show,#rules.show,#menu.show,#draftOv.show{display:flex;}
 .panel{
   background:var(--panel2); border:3px solid var(--cell-br); border-radius:16px;
-  padding:24px 20px; max-width:360px; width:100%; text-align:center;
+  padding:22px 18px; max-width:380px; width:100%; text-align:center;
   box-shadow:0 12px 40px rgba(0,0,0,.7);
 }
-.panel h2{font-size:15px; color:var(--gold-lt); margin-bottom:14px; line-height:1.6;}
-.panel p{font-size:14px; color:var(--text); margin-bottom:18px; line-height:1.5;}
+#menu .panel,#draftOv .panel,#rules .panel{max-height:88vh; max-height:88dvh; overflow-y:auto; -webkit-overflow-scrolling:touch;}
+.panel h2{font-size:14px; color:var(--gold-lt); margin-bottom:14px; line-height:1.7;}
+.panel p{font-size:14px; color:var(--text); margin-bottom:16px; line-height:1.5;}
 .btn{
   font-family:'Press Start 2P',monospace; font-size:11px; color:#1d1206;
   background:linear-gradient(180deg,var(--gold-lt),var(--gold)); border:none; border-radius:10px;
-  padding:13px 20px; cursor:pointer; box-shadow:0 4px 0 #8a611e;
+  padding:13px 18px; cursor:pointer; box-shadow:0 4px 0 #8a611e;
 }
 .btn:active{transform:translateY(2px); box-shadow:0 2px 0 #8a611e;}
+.btn:disabled{opacity:.4; pointer-events:none;}
 .btn.ghost{background:none; color:var(--muted); box-shadow:none; font-family:Rubik; font-size:13px; padding:10px;}
-#rules .panel{text-align:left; max-height:82vh; overflow-y:auto;}
-#rules h3{font-size:12px; color:var(--gold-lt); margin:14px 0 8px;}
-#rules li{font-size:13px; line-height:1.55; margin:5px 0 5px 18px; color:var(--text);}
+
+.modebtn{
+  display:block; width:100%; text-align:left; cursor:pointer;
+  background:var(--panel); border:2px solid var(--cell-br); border-radius:12px;
+  padding:12px 14px; margin:9px 0; color:var(--text);
+}
+.modebtn:active{transform:scale(.98);}
+.modebtn .mt{font-family:'Press Start 2P',monospace; font-size:10px; color:var(--gold-lt);}
+.modebtn .ms{font-size:12px; color:var(--muted); margin-top:7px; line-height:1.4;}
+
+#draftGrid{display:grid; grid-template-columns:repeat(6,1fr); gap:7px; margin:12px 0;}
+.ddie{
+  position:relative; height:46px; border-radius:8px; cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  background:linear-gradient(150deg,var(--bone),#cdb789); border:2px solid var(--bone-dk); color:var(--bone-ink);
+}
+.ddie .val{font-size:13px;}
+.ddie .badge{position:absolute; top:-7px; right:-7px; font-size:11px; filter:drop-shadow(0 1px 1px rgba(0,0,0,.5));}
+.ddie.on{outline:3px solid var(--gold); outline-offset:1px;}
+.ddie:active{transform:scale(.92);}
+#draftbtns{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-top:8px;}
+#draftCount{font-size:13px; color:var(--gold-lt); margin-bottom:0;}
+
+#rules h3{font-size:12px; color:var(--gold-lt); margin:14px 0 8px; text-align:left;}
+#rules li{font-size:13px; line-height:1.55; margin:5px 0 5px 18px; color:var(--text); text-align:left;}
 #rules .c{color:var(--gold-lt);}
-#footerbtns{display:flex; justify-content:center; gap:8px;}
+
+/* ---------- дуракуб ---------- */
+#board.durak .cell::before{padding-top:112%;}
+.die.small{width:66%; height:60%; top:4%; left:4%;}
+.die.small .val{font-size:15px;}
+.die.small.dfn{top:auto; left:auto; bottom:4%; right:4%; transform:rotate(7deg);}
+#pHand.wrap{flex-wrap:wrap; gap:8px;}
+#pHand.wrap .hdie{width:54px; height:54px;}
+#pHand.wrap .hdie .val{font-size:17px;}
+.hdie.ok{outline:2px solid var(--gold); outline-offset:1px;}
+#actionbar{display:flex; gap:10px; justify-content:center; flex-wrap:wrap;}
+
+/* масти */
+.die.su0,.hdie.su0{background:linear-gradient(150deg,#514866,#37304a); border-color:#241d33; color:#e9e2f4; box-shadow:0 4px 0 #1a1526, inset 0 2px 0 #6b6183;}
+.die.su1,.hdie.su1{background:linear-gradient(150deg,#b03e4e,#7e2030); border-color:#4d1220; color:#ffe3da; box-shadow:0 4px 0 #330c17, inset 0 2px 0 #c85a66;}
+.die.su2,.hdie.su2{background:linear-gradient(150deg,#e3ad51,#bb812c); border-color:#7a5116; color:#3a2606; box-shadow:0 4px 0 #533709, inset 0 2px 0 #f4cd85;}
+.die.su3,.hdie.su3{background:linear-gradient(150deg,#53905c,#35683f); border-color:#1c3d24; color:#e2f4de; box-shadow:0 4px 0 #122717, inset 0 2px 0 #74ab7c;}
+.sbadge{position:absolute; top:2px; right:5px; font-size:12px; opacity:.95;}
+.die.small .sbadge{font-size:10px; top:1px; right:3px;}
+.sbadge.trg{color:var(--gold-lt); text-shadow:0 0 6px rgba(240,196,105,.95);}
+
+/* ---------- эффекты и подсказки ---------- */
+.floatpts{
+  position:fixed; transform:translate(-50%,-50%); pointer-events:none; z-index:45;
+  font-family:'Press Start 2P',monospace; font-size:16px; color:var(--gold-lt);
+  text-shadow:0 3px 0 #000, 0 0 14px rgba(240,196,105,.85);
+  animation:floatup 1.3s ease forwards; white-space:nowrap;
+}
+.floatpts.foe{color:#ff7a6e; text-shadow:0 3px 0 #000, 0 0 14px rgba(255,90,80,.8);}
+.floatpts.combo{font-size:12px; color:#fff;}
+@keyframes floatup{
+  0%{opacity:0; transform:translate(-50%,-30%) scale(.6);}
+  15%{opacity:1; transform:translate(-50%,-50%) scale(1.2);}
+  30%{transform:translate(-50%,-60%) scale(1);}
+  100%{opacity:0; transform:translate(-50%,-170%) scale(1);}
+}
+.hdie.hint{animation:hintpulse 1.1s ease-in-out infinite;}
+@keyframes hintpulse{
+  0%,100%{box-shadow:0 5px 0 #7d6b47, 0 0 6px 2px rgba(240,196,105,.3), inset 0 2px 0 #fff5da;}
+  50%{box-shadow:0 5px 0 #7d6b47, 0 0 18px 7px rgba(240,196,105,.9), inset 0 2px 0 #fff5da;}
+}
+.cell.hintcell{border-color:var(--gold-lt); animation:cellpulse 1.1s ease-in-out infinite;}
+@keyframes cellpulse{
+  0%,100%{box-shadow:0 0 8px rgba(240,196,105,.4), inset 0 4px 10px rgba(0,0,0,.5);}
+  50%{box-shadow:0 0 24px rgba(240,196,105,.95), inset 0 4px 10px rgba(0,0,0,.5);}
+}
+#board.comboflash{animation:bflash .7s ease;}
+@keyframes bflash{0%{filter:brightness(1);} 25%{filter:brightness(1.65) saturate(1.5);} 100%{filter:brightness(1);}}
+#selinfo .tip{color:var(--gold-lt);}
+
+.flypts{
+  position:fixed; transform:translate(-50%,-50%); z-index:46; pointer-events:none;
+  font-family:'Press Start 2P',monospace; font-size:13px; color:var(--gold-lt);
+  text-shadow:0 2px 0 #000, 0 0 10px rgba(240,196,105,.8); white-space:nowrap;
+  transition:left .55s ease-in, top .55s ease-in, opacity .55s ease-in, transform .55s ease-in;
+}
+.flypts.foe{color:#ff7a6e; text-shadow:0 2px 0 #000, 0 0 10px rgba(255,90,80,.8);}
+.flypts.combo{color:#fff; font-size:11px;}
+.sumfx{
+  position:fixed; transform:translate(-50%,-50%); z-index:47; pointer-events:none;
+  font-family:'Press Start 2P',monospace; font-size:22px; color:var(--gold-lt);
+  text-shadow:0 4px 0 #000, 0 0 20px rgba(240,196,105,.9);
+}
+.sumfx.foe{color:#ff7a6e; text-shadow:0 4px 0 #000, 0 0 20px rgba(255,90,80,.85);}
+.sumfx.bump{animation:bump .18s ease;}
+@keyframes bump{50%{transform:translate(-50%,-50%) scale(1.35);}}
+.sumfx.final{animation:finalpop .7s ease forwards;}
+@keyframes finalpop{
+  0%{transform:translate(-50%,-50%) scale(1);}
+  30%{transform:translate(-50%,-50%) scale(1.55);}
+  100%{transform:translate(-50%,-95%) scale(1.1); opacity:0;}
+}
+.die.glow{animation:dglow .75s ease;}
+@keyframes dglow{0%,100%{filter:brightness(1);} 40%{filter:brightness(2) saturate(1.5);}}
+
+#histStrip{display:flex; gap:6px; overflow-x:auto; padding:2px 2px 6px; -webkit-overflow-scrolling:touch; scrollbar-width:none;}
+#histStrip::-webkit-scrollbar{display:none;}
+.hpill{
+  flex:0 0 auto; border-radius:9px; padding:6px 10px; cursor:pointer;
+  font-family:'Press Start 2P',monospace; font-size:9px;
+  background:var(--panel); border:2px solid var(--cell-br); color:var(--muted);
+  display:flex; gap:7px; align-items:center;
+}
+.hpill .pv{color:var(--gold-lt);}
+.hpill .pv.neg{color:#ff8a7e;}
+.hpill.foe{background:#221420;}
+.hpill.act{background:var(--panel2); border-color:var(--gold);}
+.hpill.foe.act{border-color:#c25a50;}
+.hcard{
+  margin-top:7px; border-radius:12px; padding:10px 12px;
+  background:linear-gradient(160deg,#231a34,#191225);
+  border:2px solid var(--cell-br); box-shadow:inset 0 2px 0 rgba(255,255,255,.04);
+}
+.hcard .hhdr{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;}
+.hcard .hwho{font-family:'Press Start 2P',monospace; font-size:9px; letter-spacing:1px; color:var(--gold-lt);}
+.hcard.foe .hwho{color:#ff8a7e;}
+.hcard .htot{font-family:'Press Start 2P',monospace; font-size:16px; color:var(--gold-lt); text-shadow:0 2px 0 #000;}
+.hcard .htot.neg{color:#ff8a7e;}
+.hcard .hchips{display:flex; flex-wrap:wrap; gap:6px;}
+.hchip{
+  background:#181226; border:1px solid #443463; border-radius:8px;
+  padding:4px 10px; font-size:12.5px; color:var(--muted);
+}
+.hchip .plus{color:var(--gold-lt); font-weight:700; margin-left:3px;}
+.hchip .minus{color:#ff8a7e; font-weight:700; margin-left:3px;}
+.hchip .dval{
+  display:inline-block; margin-left:5px; padding:0 5px; line-height:16px;
+  background:var(--bone); color:var(--bone-ink); border:1px solid var(--bone-dk);
+  border-radius:4px; font-weight:700; font-size:11.5px;
+}
 
 @media (prefers-reduced-motion:reduce){
   *{animation:none !important; transition:none !important;}
@@ -149,7 +280,7 @@ body{
 </head>
 <body>
 <div id="app">
-  <div id="title" class="pixel">КОСТИ ПОДЗЕМЕЛЬЯ<small>прототип механики</small></div>
+  <div id="title" class="pixel">КОСТИ ПОДЗЕМЕЛЬЯ<small id="modeTag">прототип механики</small></div>
 
   <div class="zone">
     <div class="zone-row">
@@ -171,6 +302,8 @@ body{
   <div id="board"></div>
 
   <div id="selinfo"></div>
+  <div id="actionbar"></div>
+  <div id="summary"></div>
   <div id="toast"></div>
 
   <div class="zone">
@@ -182,7 +315,10 @@ body{
     <div id="pHand"></div>
     <div class="zone-row" style="margin-top:8px;">
       <span class="deckcount" id="pDeck"></span>
-      <button class="btn ghost" onclick="document.getElementById('rules').classList.add('show')">Правила и очки</button>
+      <span>
+        <button class="btn ghost" id="menuBtn">Меню</button>
+        <button class="btn ghost" onclick="document.getElementById('rules').classList.add('show')">Правила</button>
+      </span>
     </div>
   </div>
 </div>
@@ -194,6 +330,28 @@ body{
     <h2 class="pixel" id="ovTitle"></h2>
     <p id="ovText"></p>
     <button class="btn" id="ovBtn"></button>
+    <div style="margin-top:10px;"><button class="btn ghost" id="ovBtn2">В меню</button></div>
+  </div>
+</div>
+
+<div id="menu">
+  <div class="panel">
+    <h2 class="pixel">КОСТИ<br>ПОДЗЕМЕЛЬЯ</h2>
+    <p style="color:var(--muted); font-size:12px;">Выбери режим</p>
+    <div id="modeList"></div>
+  </div>
+</div>
+
+<div id="draftOv">
+  <div class="panel">
+    <h2 class="pixel">СОБЕРИ КОЛОДУ</h2>
+    <p id="draftCount"></p>
+    <div id="draftGrid"></div>
+    <div id="draftbtns">
+      <button class="btn ghost" id="draftRnd">Случайно</button>
+      <button class="btn" id="draftGo" disabled>В бой</button>
+    </div>
+    <div style="margin-top:8px;"><button class="btn ghost" id="draftMenu">В меню</button></div>
   </div>
 </div>
 
@@ -203,64 +361,165 @@ body{
     <h3 class="pixel">Ход</h3>
     <li>Выбери куб в руке, поставь на пустую клетку или съешь вражеский.</li>
     <li>Базовый куб ест только куб со значением <b>≤ своего</b>: шестёрка ест всех, единица — только единицу.</li>
-    <li>В раунде у каждого 6 ходов. Больше очков — забираешь у врага ♥.</li>
     <h3 class="pixel">Очки за ход</h3>
-    <li><span class="c">Съедение</span>: значение съеденного куба</li>
-    <li><span class="c">Поле</span>: сумма значений твоих кубов на поле</li>
+    <li><span class="c">Съел</span>: значение съеденного куба</li>
+    <li><span class="c">Кубы на поле</span>: сумма значений твоих кубов на поле</li>
     <li><span class="c">Комбо</span> из твоих кубов: пара +5, две пары +10, сет +15, фулл-хаус +25, каре +40, пятёрка +60, шестёрка +100</li>
     <h3 class="pixel">Особые кубы</h3>
     <li>🛡 <b>Щит</b> — 2 вражеских хода его нельзя съесть</li>
     <li>🦷 <b>Челюсть</b> — при выставлении съедает вражеский куб справа</li>
     <li>🦔 <b>Шипы</b> — скрыт; съевший теряет 10 очков</li>
     <li>💣 <b>Мина</b> — скрыта; уничтожает себя и атакующего, ход сгорает</li>
-    <li>🤝 <b>Дружелюбный</b> — прибавляет к себе значение лучшего соседа</li>
+    <li>🤝 <b>Дружелюбный</b> — прибавляет к себе сумму значений всех соседей (макс 12)</li>
     <li>🔮 <b>Колдун</b> — ест любой куб и копирует его значение</li>
+    <h3 class="pixel">Режимы</h3>
+    <li><b>Классика</b> и <b>Большая доска</b> — по 3 жизни, проигравший раунд теряет ♥.</li>
+    <li><b>Своя колода</b> — 18 кубов на 3 раунда, у врага та же колода. Кто взял 2 раунда — победил.</li>
+    <li><b>Гонка до 500</b> — счёт копится между раундами, раунды идут, пока кто-то не наберёт 500.</li>
+    <li><b>Территория</b> — раунд берёт тот, чьих кубов на поле осталось больше.</li>
+    <li><b>Дуракуб</b> — подкидной дурак как в картах: 24 куба, 4 масти, козырь — масть нижнего куба колоды. Бей старшим той же масти или козырем, подкидывать можно значения, которые уже на столе. Не отбился — забирай стол. Остался с кубами — ты Дуракуб.</li>
     <p style="margin-top:16px; text-align:center;"><button class="btn" onclick="document.getElementById('rules').classList.remove('show')">Понятно</button></p>
   </div>
 </div>
 
 <script>
 'use strict';
-const $=id=>document.getElementById(id);
-const COLS=3, CELLS=6, MOVES=6, LIVES=3;
+var $=function(id){return document.getElementById(id);};
+var LIVESMAX=3;
 
-const TYPES={
+var TYPES={
   basic:   {icon:'',  name:'Базовый',      desc:'Ест куб со значением ≤ своего.'},
   shield:  {icon:'🛡', name:'Щит',          desc:'2 вражеских хода защищён от съедения.'},
   spikes:  {icon:'🦔', name:'Шипы',         desc:'Скрыт от врага. Съевший теряет 10 очков.', hidden:true},
   mine:    {icon:'💣', name:'Мина',         desc:'Скрыта. Взрывает себя и атакующего, ход сгорает.', hidden:true},
   jaw:     {icon:'🦷', name:'Челюсть',      desc:'При выставлении съедает вражеский куб справа.'},
-  friendly:{icon:'🤝', name:'Дружелюбный',  desc:'Прибавляет к себе значение лучшего соседа.'},
+  friendly:{icon:'🤝', name:'Дружелюбный',  desc:'Прибавляет к себе сумму значений всех соседей (макс 12).'},
   warlock: {icon:'🔮', name:'Колдун',       desc:'Ест любой куб и копирует его значение.'}
 };
-const WEIGHTS=[['basic',50],['shield',9],['spikes',9],['mine',7],['jaw',9],['friendly',8],['warlock',8]];
+var WEIGHTS=[['basic',50],['shield',9],['spikes',9],['mine',7],['jaw',9],['friendly',8],['warlock',8]];
 
-let S=null, sel=null, busy=false, fx={placed:-1,boom:[]};
+var MODES={
+  classic:  {title:'КЛАССИКА',      sub:'3 жизни · поле 3×2 · 6 ходов в раунде', cols:3, cells:6, moves:6, kind:'lives', deck:'perRound', deckSize:10},
+  big:      {title:'БОЛЬШАЯ ДОСКА', sub:'3 жизни · поле 3×3 · 10 ходов в раунде', cols:3, cells:9, moves:10, kind:'lives', deck:'perRound', deckSize:14},
+  draft:    {title:'СВОЯ КОЛОДА',   sub:'Собери 18 кубов из 30 · у врага та же колода · 3 раунда, побеждает счёт', cols:3, cells:6, moves:6, kind:'bo3', winBy:'score', deck:'draft'},
+  race:     {title:'ГОНКА ДО 500',  sub:'Случайная общая колода · счёт копится между раундами · кто первым наберёт 500', cols:3, cells:6, moves:6, kind:'race', target:500, deck:'shared'},
+  territory:{title:'ТЕРРИТОРИЯ',    sub:'Собери колоду · 3 раунда · раунд берёт тот, чьих кубов на поле осталось больше', cols:3, cells:6, moves:6, kind:'bo3', winBy:'count', deck:'draft'},
+  durak:    {title:'ДУРАКУБ',       sub:'Подкидной дурак как в картах: 24 куба, 4 масти, козырь · остался с кубами — ты Дуракуб', kind:'durak'}
+};
+var MODE_ORDER=['classic','big','draft','race','territory','durak'];
+
+var S=null, sel=null, busy=false, fx={placed:-1,boom:[]};
+var draftOffer=[], draftSel=[];
 
 function rnd(n){return Math.floor(Math.random()*n);}
 function pickType(){
-  let t=rnd(100), acc=0;
-  for(const [k,w] of WEIGHTS){acc+=w; if(t<acc)return k;}
+  var t=rnd(100), acc=0;
+  for(var i=0;i<WEIGHTS.length;i++){acc+=WEIGHTS[i][1]; if(t<acc)return WEIGHTS[i][0];}
   return 'basic';
 }
-function makeDeck(){
-  const d=[];
-  for(let i=0;i<10;i++)d.push({value:1+rnd(6), type:pickType()});
-  return d;
+function randomDie(){return {value:1+rnd(6), type:pickType()};}
+function makeDeck(n){var d=[];for(var i=0;i<n;i++)d.push(randomDie());return d;}
+function shuffle(a){
+  for(var i=a.length-1;i>0;i--){var j=rnd(i+1),t=a[i];a[i]=a[j];a[j]=t;}
+  return a;
+}
+function copyDice(arr){return arr.map(function(d){return {value:d.value,type:d.type};});}
+
+/* ---------------- menu & draft ---------------- */
+function showMenu(){
+  $('overlay').classList.remove('show');
+  $('draftOv').classList.remove('show');
+  var list=$('modeList'); list.innerHTML='';
+  MODE_ORDER.forEach(function(k){
+    var m=MODES[k];
+    var b=document.createElement('button');
+    b.className='modebtn';
+    b.innerHTML='<div class="mt">'+m.title+'</div><div class="ms">'+m.sub+'</div>';
+    b.onclick=function(){ $('menu').classList.remove('show'); startMode(k); };
+    list.appendChild(b);
+  });
+  $('menu').classList.add('show');
+}
+function startMode(key){
+  var cfg=MODES[key];
+  if(cfg.kind==='durak'){ initDurak(key); return; }
+  if(cfg.deck==='draft'){ openDraft(key); return; }
+  if(cfg.deck==='shared'){
+    var base=makeDeck(18);
+    initMatch(key, shuffle(copyDice(base)), shuffle(copyDice(base)));
+    return;
+  }
+  initMatch(key, null, null);
+}
+function openDraft(key){
+  draftOffer=makeDeck(30);
+  draftSel=[];
+  $('draftGo').onclick=function(){
+    var picked=draftSel.map(function(i){return draftOffer[i];});
+    $('draftOv').classList.remove('show');
+    initMatch(key, shuffle(copyDice(picked)), shuffle(copyDice(picked)));
+  };
+  $('draftRnd').onclick=function(){
+    var rest=[];
+    for(var i=0;i<30;i++)if(draftSel.indexOf(i)<0)rest.push(i);
+    shuffle(rest);
+    while(draftSel.length<18&&rest.length)draftSel.push(rest.pop());
+    renderDraft();
+  };
+  $('draftMenu').onclick=function(){ $('draftOv').classList.remove('show'); showMenu(); };
+  renderDraft();
+  $('draftOv').classList.add('show');
+}
+function renderDraft(){
+  $('draftCount').textContent='Выбрано '+draftSel.length+' / 18';
+  $('draftGo').disabled=(draftSel.length!==18);
+  var g=$('draftGrid'); g.innerHTML='';
+  draftOffer.forEach(function(d,i){
+    var t=TYPES[d.type];
+    var el=document.createElement('div');
+    el.className='ddie'+(draftSel.indexOf(i)>=0?' on':'');
+    el.innerHTML='<span class="val pixel">'+d.value+'</span>'+(t.icon?'<span class="badge">'+t.icon+'</span>':'');
+    el.onclick=function(){
+      var p=draftSel.indexOf(i);
+      if(p>=0)draftSel.splice(p,1);
+      else if(draftSel.length<18)draftSel.push(i);
+      renderDraft();
+    };
+    g.appendChild(el);
+  });
 }
 
-/* ---------------- game flow ---------------- */
-function newGame(){
-  S={round:0, pLives:LIVES, eLives:LIVES, firstP:true};
+/* ---------------- match flow ---------------- */
+function initMatch(key, pDeckFull, eDeckFull){
+  var cfg=MODES[key];
+  S={modeKey:key, cfg:cfg, token:Math.random(), round:0, firstP:true,
+     pScore:0, eScore:0, pTotal:0, eTotal:0, history:[], histSel:-1,
+     pHand:[], eHand:[], pDeck:pDeckFull||[], eDeck:eDeckFull||[]};
+  if(cfg.kind==='lives'){S.pLives=LIVESMAX; S.eLives=LIVESMAX;}
+  if(cfg.kind==='bo3'){S.pWins=0; S.eWins=0;}
+  $('modeTag').textContent=cfg.title.toLowerCase();
   newRound();
+}
+function schedule(fn,ms){
+  var t=S?S.token:null;
+  setTimeout(function(){ if(S&&S.token===t)fn(); },ms);
 }
 function newRound(){
   S.round++;
-  S.board=Array(CELLS).fill(null);
-  S.pScore=0; S.eScore=0; S.pMoves=0; S.eMoves=0;
-  S.pDeck=makeDeck(); S.eDeck=makeDeck();
-  S.pHand=[]; S.eHand=[];
-  for(let i=0;i<3;i++){S.pHand.push(S.pDeck.pop()); S.eHand.push(S.eDeck.pop());}
+  S.board=Array(S.cfg.cells).fill(null);
+  S.pMoves=0; S.eMoves=0;
+  if(S.cfg.kind!=='race'){S.pScore=0; S.eScore=0;}
+  if(S.cfg.deck==='perRound'){
+    S.pDeck=makeDeck(S.cfg.deckSize); S.eDeck=makeDeck(S.cfg.deckSize);
+    S.pHand=[]; S.eHand=[];
+  }
+  if(S.cfg.deck==='shared'&&S.pDeck.length<6){
+    var extra=makeDeck(18); // общая добавка — одинаковая у обоих
+    S.pDeck=shuffle(copyDice(extra)).concat(S.pDeck);
+    S.eDeck=shuffle(copyDice(extra)).concat(S.eDeck);
+  }
+  while(S.pHand.length<3&&S.pDeck.length)S.pHand.push(S.pDeck.pop());
+  while(S.eHand.length<3&&S.eDeck.length)S.eHand.push(S.eDeck.pop());
   S.turn=S.firstP?'p':'e';
   S.firstP=!S.firstP;
   sel=null; busy=(S.turn==='e');
@@ -268,26 +527,29 @@ function newRound(){
   render();
   banner('РАУНД '+S.round);
   toast('');
-  if(S.turn==='e')setTimeout(enemyTurn,1200);
+  S.history=[]; S.histSel=-1;
+  renderHistory();
+  if(S.turn==='e')schedule(enemyTurn,1200);
 }
 
 function moves(o){return o==='p'?S.pMoves:S.eMoves;}
 function incMoves(o){if(o==='p')S.pMoves++;else S.eMoves++;}
 
 function neighbors(i){
-  const r=Math.floor(i/COLS), c=i%COLS, res=[];
-  if(c>0)res.push(i-1); if(c<COLS-1)res.push(i+1);
-  if(r>0)res.push(i-COLS); if(i+COLS<CELLS)res.push(i+COLS);
+  var C=S.cfg.cols, N=S.cfg.cells;
+  var r=Math.floor(i/C), c=i%C, res=[];
+  if(c>0)res.push(i-1); if(c<C-1)res.push(i+1);
+  if(r>0)res.push(i-C); if(i+C<N)res.push(i+C);
   return res;
 }
-function maxNeighborVal(board,i){
-  let m=0;
-  neighbors(i).forEach(j=>{if(board[j]&&board[j].v>m)m=board[j].v;});
-  return m;
+function neighborSum(board,i){
+  var s=0;
+  neighbors(i).forEach(function(j){if(board[j])s+=board[j].v;});
+  return s;
 }
 function legalTargets(die,owner){
-  const res=[];
-  S.board.forEach((c,i)=>{
+  var res=[];
+  S.board.forEach(function(c,i){
     if(!c){res.push(i);return;}
     if(c.owner===owner)return;
     if(c.shield>0)return;
@@ -296,45 +558,48 @@ function legalTargets(die,owner){
   return res;
 }
 function hasLegal(owner){
-  const hand=owner==='p'?S.pHand:S.eHand;
-  return hand.some(d=>legalTargets(d,owner).length>0);
+  var hand=owner==='p'?S.pHand:S.eHand;
+  return hand.some(function(d){return legalTargets(d,owner).length>0;});
 }
-function ownerVals(board,owner){return board.filter(c=>c&&c.owner===owner).map(c=>c.v);}
-function boardSum(board,owner){return ownerVals(board,owner).reduce((a,b)=>a+b,0);}
+function ownerVals(board,owner){return board.filter(function(c){return c&&c.owner===owner;}).map(function(c){return c.v;});}
+function ownerCount(board,owner){return board.filter(function(c){return c&&c.owner===owner;}).length;}
+function boardSum(board,owner){return ownerVals(board,owner).reduce(function(a,b){return a+b;},0);}
 function comboBonus(vals){
-  const cnt={}; vals.forEach(v=>cnt[v]=(cnt[v]||0)+1);
-  const c=Object.values(cnt).sort((a,b)=>b-a);
-  if(!c.length)return{b:0,n:null};
-  if(c[0]>=6)return{b:100,n:'ШЕСТЁРКА!'};
-  if(c[0]===5)return{b:60,n:'ПЯТЁРКА!'};
-  if(c[0]===4)return{b:40,n:'КАРЕ!'};
-  if(c[0]===3&&c[1]>=2)return{b:25,n:'ФУЛЛ-ХАУС!'};
-  if(c[0]===3)return{b:15,n:'СЕТ!'};
-  if(c[0]===2&&c[1]>=2)return{b:10,n:'ДВЕ ПАРЫ'};
-  if(c[0]===2)return{b:5,n:'ПАРА'};
-  return{b:0,n:null};
+  var cnt={}; vals.forEach(function(v){cnt[v]=(cnt[v]||0)+1;});
+  var ent=Object.keys(cnt).map(function(k){return {v:+k,c:cnt[k]};})
+    .sort(function(a,b){return b.c-a.c||b.v-a.v;});
+  if(!ent.length)return{b:0,n:null,vals:[]};
+  var e0=ent[0], e1=ent[1];
+  if(e0.c>=6)return{b:100,n:'ШЕСТЁРКА!',vals:[e0.v]};
+  if(e0.c===5)return{b:60,n:'ПЯТЁРКА!',vals:[e0.v]};
+  if(e0.c===4)return{b:40,n:'КАРЕ!',vals:[e0.v]};
+  if(e0.c===3&&e1&&e1.c>=2)return{b:25,n:'ФУЛЛ-ХАУС!',vals:[e0.v,e1.v]};
+  if(e0.c===3)return{b:15,n:'СЕТ!',vals:[e0.v]};
+  if(e0.c===2&&e1&&e1.c>=2)return{b:10,n:'ДВЕ ПАРЫ',vals:[e0.v,e1.v]};
+  if(e0.c===2)return{b:5,n:'ПАРА',vals:[e0.v]};
+  return{b:0,n:null,vals:[]};
 }
 
 function doMove(owner,handIdx,cellIdx){
-  const hand=owner==='p'?S.pHand:S.eHand;
-  const deck=owner==='p'?S.pDeck:S.eDeck;
-  const die=hand.splice(handIdx,1)[0];
+  var hand=owner==='p'?S.pHand:S.eHand;
+  var deck=owner==='p'?S.pDeck:S.eDeck;
+  var die=hand.splice(handIdx,1)[0];
   if(deck.length)hand.push(deck.pop());
 
   fx={placed:-1,boom:[]};
-  let eatPts=0, spikesHit=0, mined=false;
-  const notes=[];
-  const target=S.board[cellIdx];
-  const piece={v:die.value, type:die.type, owner, shield:die.type==='shield'?2:0};
+  var eatPts=0, jawPts=0, spikesHit=0, mined=false, warlockAte=false;
+  var xparts=[];
+  var target=S.board[cellIdx];
+  var piece={v:die.value, type:die.type, owner:owner, shield:die.type==='shield'?2:0};
 
   if(target){
     if(target.type==='mine'){
       S.board[cellIdx]=null; mined=true; fx.boom.push(cellIdx);
-      notes.push('💣 МИНА! Оба куба уничтожены, ход сгорел');
+      xparts=[{t:'Подорвался на мине', icon:'💣'}];
     }else{
-      if(die.type==='warlock'){piece.v=target.v; notes.push('🔮 колдун стал '+target.v);}
+      if(die.type==='warlock'){piece.v=target.v; warlockAte=true; xparts.push({t:'Превратился в', v:target.v, icon:'🔮'});}
       eatPts+=target.v;
-      if(target.type==='spikes'){spikesHit+=10; notes.push('🦔 шипы −10');}
+      if(target.type==='spikes')spikesHit+=10;
       S.board[cellIdx]=piece; fx.placed=cellIdx;
     }
   }else{
@@ -343,207 +608,702 @@ function doMove(owner,handIdx,cellIdx){
 
   if(!mined){
     if(die.type==='friendly'){
-      const mv=maxNeighborVal(S.board.map((c,j)=>j===cellIdx?null:c),cellIdx);
-      if(mv>0){piece.v=Math.min(piece.v+mv,12); notes.push('🤝 +'+mv+' от соседа');}
+      var add=neighborSum(S.board,cellIdx);
+      if(add>0){
+        var before=piece.v;
+        piece.v=Math.min(piece.v+add,12);
+        var got=piece.v-before;
+        if(got>0)xparts.push({t:'Дружески перенял', v:got, icon:'🤝', die:true});
+      }
     }
-    if(die.type==='jaw'&&cellIdx%COLS<COLS-1){
-      const j=cellIdx+1, t2=S.board[j];
+    if(die.type==='jaw'&&cellIdx%S.cfg.cols<S.cfg.cols-1){
+      var j=cellIdx+1, t2=S.board[j];
       if(t2&&t2.owner!==owner&&!(t2.shield>0)){
         if(t2.type==='mine'){
           S.board[j]=null; S.board[cellIdx]=null; mined=true;
-          fx.boom.push(j,cellIdx); fx.placed=-1;
-          notes.length=0; notes.push('💣 Челюсть напоролась на мину! Ход сгорел');
+          fx.boom.push(j); fx.boom.push(cellIdx); fx.placed=-1;
+          xparts=[{t:'Пережевал мину', icon:'💣'}];
         }else{
-          eatPts+=t2.v;
-          if(t2.type==='spikes'){spikesHit+=10; notes.push('🦔 шипы −10');}
-          S.board[j]=null; notes.push('🦷 челюсть съела '+t2.v);
+          jawPts+=t2.v;
+          if(t2.type==='spikes')spikesHit+=10;
+          S.board[j]=null; xparts.push({t:'Пережевал', v:t2.v, icon:'🦷'});
         }
       }
     }
   }
 
-  // shields of the OTHER player burn down after this move
-  S.board.forEach(c=>{if(c&&c.owner!==owner&&c.shield>0)c.shield--;});
+  // щиты противника выгорают после этого хода
+  S.board.forEach(function(c){if(c&&c.owner!==owner&&c.shield>0)c.shield--;});
 
-  let gain=0; const parts=[];
+  var gain=0, parts=[], cbHit=null;
+  var placedNow=S.board[cellIdx];
   if(!mined){
-    if(eatPts){gain+=eatPts; parts.push('съедение +'+eatPts);}
-    const bs=boardSum(S.board,owner);
-    if(bs){gain+=bs; parts.push('поле +'+bs);}
-    const cb=comboBonus(ownerVals(S.board,owner));
-    if(cb.b){gain+=cb.b; parts.push(cb.n.toLowerCase().replace('!','')+' +'+cb.b);
-      if(cb.b>=15)banner(cb.n+' +'+cb.b);}
-    if(spikesHit)parts.push('шипы −'+spikesHit);
+    if(eatPts){gain+=eatPts; if(!warlockAte)parts.push({t:'Съел', v:eatPts});}
+    if(jawPts)gain+=jawPts;
+    var bs=boardSum(S.board,owner);
+    if(bs){gain+=bs; parts.push({t:'Кубы на поле', v:bs});}
+    var cb=comboBonus(ownerVals(S.board,owner));
+    if(cb.b){gain+=cb.b; cbHit=cb;
+      var cn=cb.n.replace('!','');
+      parts.push({t:cn.charAt(0)+cn.slice(1).toLowerCase(), v:cb.b});}
+    if(spikesHit)parts.push({t:'Укололся на', v:spikesHit, neg:true, icon:'🦔'});
+    parts=parts.concat(xparts);
+  }else{
+    parts=xparts;
   }
-  const delta=gain-spikesHit;
+  var delta=gain-spikesHit;
   if(owner==='p')S.pScore=Math.max(0,S.pScore+delta);
   else S.eScore=Math.max(0,S.eScore+delta);
 
   incMoves(owner);
   sel=null;
   render();
-  const txt=mined?notes.join(' · '):
-    (parts.length?parts.join(' · '):'без очков')+(notes.length?' · '+notes.join(' · '):'');
-  toast((owner==='p'?'Ты: ':'Враг: ')+txt, owner==='e');
-  setTimeout(advance, 900);
+  S.history.push({n:S.history.length+1, who:owner, pts:delta, parts:parts, mined:mined});
+  S.histSel=-1;
+  renderHistory();
+
+  // последовательная анимация очков: каждое значение слетается в сумму хода
+  var seqDur=900;
+  if(mined){
+    floatScore(cellIdx,'💥','combo');
+  }else{
+    var events=[];
+    if(eatPts)events.push({ci:cellIdx, label:(warlockAte?'🔮 +':'+')+eatPts, amt:eatPts});
+    if(jawPts)events.push({ci:cellIdx, label:'🦷 +'+jawPts, amt:jawPts});
+    if(placedNow&&placedNow.owner===owner)
+      events.push({ci:cellIdx, label:'+'+placedNow.v, amt:placedNow.v});
+    S.board.forEach(function(c,i){
+      if(c&&c.owner===owner&&i!==cellIdx)
+        events.push({ci:i, label:'+'+c.v, amt:c.v});
+    });
+    if(cbHit){
+      var hl=comboCells(owner,cbHit);
+      events.push({ci:hl.length?hl[0]:cellIdx, label:cbHit.n.replace('!','')+' +'+cbHit.b, amt:cbHit.b, cls:'combo', hl:hl});
+      if(cbHit.b>=25){
+        var bd=$('board'); bd.classList.add('comboflash');
+        setTimeout(function(){bd.classList.remove('comboflash');},750);
+      }
+    }
+    if(spikesHit)events.push({ci:cellIdx, label:'🦔 −'+spikesHit, amt:-spikesHit, cls:'foe'});
+    if(events.length){
+      seqDur=events.length*450+1700;
+      playScoreSequence(owner,events);
+    }
+  }
+
+  // мгновенная победа в гонке
+  if(S.cfg.kind==='race'&&(S.pScore>=S.cfg.target||S.eScore>=S.cfg.target)){
+    banner('500!');
+    busy=true;
+    schedule(matchEnd,seqDur+300);
+    return;
+  }
+  schedule(advance,seqDur);
 }
 
 function advance(){
-  if(S.pMoves>=MOVES&&S.eMoves>=MOVES){endRound();return;}
-  let next=S.turn==='p'?'e':'p';
-  if(moves(next)>=MOVES)next=S.turn;
+  var M=S.cfg.moves;
+  if(S.pMoves>=M&&S.eMoves>=M){endRound();return;}
+  var next=S.turn==='p'?'e':'p';
+  if(moves(next)>=M)next=S.turn;
   S.turn=next;
   if(!hasLegal(next)){
     toast(next==='p'?'У тебя нет ходов — пас':'У врага нет ходов — пас', next==='e');
     incMoves(next); render();
-    setTimeout(advance,800); return;
+    schedule(advance,800); return;
   }
   busy=(next==='e');
   render();
-  if(next==='e')setTimeout(enemyTurn,1100);
+  if(next==='e')schedule(enemyTurn,1100);
 }
 
 function endRound(){
   busy=true;
-  let t,txt;
-  if(S.pScore>S.eScore){S.eLives--; t='РАУНД ТВОЙ!'; txt=S.pScore+' : '+S.eScore+' — враг теряет ♥';}
-  else if(S.eScore>S.pScore){S.pLives--; t='РАУНД ЗА ВРАГОМ'; txt=S.pScore+' : '+S.eScore+' — ты теряешь ♥';}
-  else{t='НИЧЬЯ'; txt=S.pScore+' : '+S.eScore+' — жизни целы';}
+  var k=S.cfg.kind;
   render();
-  setTimeout(()=>{
-    if(S.pLives<=0)showOverlay('ПОРАЖЕНИЕ','Подземелье забрало твои кости. '+txt,'Сыграть снова',newGame);
-    else if(S.eLives<=0)showOverlay('ПОБЕДА!','Враг повержен! '+txt,'Сыграть снова',newGame);
-    else showOverlay(t,txt,'Следующий раунд',newRound);
-  },700);
+  if(k==='lives'){
+    var t,txt;
+    if(S.pScore>S.eScore){S.eLives--; t='РАУНД ТВОЙ!'; txt=S.pScore+' : '+S.eScore+' — враг теряет ♥';}
+    else if(S.eScore>S.pScore){S.pLives--; t='РАУНД ЗА ВРАГОМ'; txt=S.pScore+' : '+S.eScore+' — ты теряешь ♥';}
+    else{t='НИЧЬЯ'; txt=S.pScore+' : '+S.eScore+' — жизни целы';}
+    render();
+    if(S.pLives<=0||S.eLives<=0){schedule(matchEnd,700);}
+    else schedule(function(){showOverlay(t,txt,'Следующий раунд',newRound);},700);
+  }
+  else if(k==='bo3'){
+    var msg,sub;
+    if(S.cfg.winBy==='count'){
+      var pc=ownerCount(S.board,'p'), ec=ownerCount(S.board,'e');
+      if(pc>ec){S.pWins++; msg='РАУНД ТВОЙ!'; sub='Кубов на поле '+pc+' : '+ec;}
+      else if(ec>pc){S.eWins++; msg='РАУНД ЗА ВРАГОМ'; sub='Кубов на поле '+pc+' : '+ec;}
+      else{msg='НИЧЬЯ В РАУНДЕ'; sub='Кубов поровну: '+pc+' : '+ec;}
+    }else{
+      if(S.pScore>S.eScore){S.pWins++; msg='РАУНД ТВОЙ!'; sub='Счёт '+S.pScore+' : '+S.eScore;}
+      else if(S.eScore>S.pScore){S.eWins++; msg='РАУНД ЗА ВРАГОМ'; sub='Счёт '+S.pScore+' : '+S.eScore;}
+      else{msg='НИЧЬЯ В РАУНДЕ'; sub='Счёт '+S.pScore+' : '+S.eScore;}
+    }
+    S.pTotal+=S.pScore; S.eTotal+=S.eScore;
+    sub+=' · победы '+S.pWins+' : '+S.eWins;
+    render();
+    if(S.pWins>=2||S.eWins>=2||S.round>=3){schedule(matchEnd,700);}
+    else schedule(function(){showOverlay(msg,sub,'Следующий раунд',newRound);},700);
+  }
+  else{ // race — раунды идут, пока кто-то не наберёт цель
+    schedule(function(){
+      showOverlay('РАУНД '+S.round+' СЫГРАН','Счёт: '+S.pScore+' : '+S.eScore+' · цель '+S.cfg.target,'Дальше',newRound);
+    },700);
+  }
+}
+
+function matchEnd(){
+  busy=true;
+  var k=S.cfg.kind, title, text;
+  if(k==='lives'){
+    if(S.pLives<=0){title='ПОРАЖЕНИЕ'; text='Подземелье забрало твои кости.';}
+    else{title='ПОБЕДА!'; text='Враг повержен!';}
+  }
+  else if(k==='race'){
+    if(S.pScore>=S.cfg.target&&S.pScore>=S.eScore){title='ПОБЕДА!'; text='Ты добежал до '+S.cfg.target+'! Итог '+S.pScore+' : '+S.eScore;}
+    else if(S.eScore>=S.cfg.target){title='ПОРАЖЕНИЕ'; text='Враг добежал первым. Итог '+S.pScore+' : '+S.eScore;}
+    else{title='НИЧЬЯ'; text='Итог '+S.pScore+' : '+S.eScore;}
+  }
+  else{ // bo3
+    var res=0;
+    if(S.pWins>S.eWins)res=1; else if(S.eWins>S.pWins)res=-1;
+    else if(S.pTotal>S.eTotal)res=1; else if(S.eTotal>S.pTotal)res=-1;
+    if(res>0)title='ПОБЕДА!'; else if(res<0)title='ПОРАЖЕНИЕ'; else title='НИЧЬЯ';
+    text='Победы '+S.pWins+' : '+S.eWins+' · очки за матч '+S.pTotal+' : '+S.eTotal;
+  }
+  var key=S.modeKey;
+  showOverlay(title,text,'Ещё раз',function(){startMode(key);});
 }
 
 /* ---------------- enemy AI ---------------- */
 function evalMove(die,ci,owner){
-  const b=S.board.map(c=>c?{...c}:null);
-  let gain=0;
-  const t=b[ci];
-  const piece={v:die.value,type:die.type,owner,shield:0};
+  var b=S.board.map(function(c){return c?{v:c.v,type:c.type,owner:c.owner,shield:c.shield}:null;});
+  var gain=0;
+  var t=b[ci];
+  var piece={v:die.value,type:die.type,owner:owner,shield:0};
   if(t){
     if(die.type==='warlock')piece.v=t.v;
-    gain+=t.v*2;               // eat points + denial bonus (AI не знает про шипы/мины)
+    gain+=t.v*2; // съедение + лишение врага дохода (ИИ не знает про шипы/мины)
     b[ci]=piece;
   }else b[ci]=piece;
   if(die.type==='friendly'){
-    const mv=maxNeighborVal(b.map((c,j)=>j===ci?null:c),ci);
-    piece.v=Math.min(piece.v+mv,12);
+    piece.v=Math.min(piece.v+neighborSum(b,ci),12);
   }
-  if(die.type==='jaw'&&ci%COLS<COLS-1){
-    const t2=b[ci+1];
+  if(die.type==='jaw'&&ci%S.cfg.cols<S.cfg.cols-1){
+    var t2=b[ci+1];
     if(t2&&t2.owner!==owner&&!(t2.shield>0)){gain+=t2.v*2; b[ci+1]=null;}
   }
   gain+=boardSum(b,owner);
   gain+=comboBonus(ownerVals(b,owner)).b;
+  if(S.cfg.winBy==='count'){
+    gain+=ownerCount(b,owner)*10;
+    if(t)gain+=10;
+  }
   return gain;
 }
 function enemyTurn(){
   if(!S)return;
-  let best=null;
-  S.eHand.forEach((die,hi)=>{
-    legalTargets(die,'e').forEach(ci=>{
-      const sc=evalMove(die,ci,'e')+Math.random()*5;
-      if(!best||sc>best.sc)best={hi,ci,sc};
+  var best=null;
+  S.eHand.forEach(function(die,hi){
+    legalTargets(die,'e').forEach(function(ci){
+      var sc=evalMove(die,ci,'e')+Math.random()*5;
+      if(!best||sc>best.sc)best={hi:hi,ci:ci,sc:sc};
     });
   });
-  if(!best){setTimeout(advance,400);return;}
+  if(!best){schedule(advance,400);return;}
   doMove('e',best.hi,best.ci);
+}
+
+/* ---------------- Дуракуб ---------------- */
+var SUITS=['♠','♥','♦','♣'];
+function initDurak(key){
+  var cfg=MODES[key];
+  S={modeKey:key, cfg:cfg, token:Math.random(),
+     talon:makeDurakDeck(), discard:0, trump:0,
+     pHand:[], eHand:[], table:[], attacker:'p', maxAtt:6, phase:'idle'};
+  S.trump=S.talon[0].suit; // нижний куб колоды — козырь
+  for(var i=0;i<6;i++){S.pHand.push(S.talon.pop()); S.eHand.push(S.talon.pop());}
+  $('modeTag').textContent=cfg.title.toLowerCase();
+  toast('Козырь: '+SUITS[S.trump]);
+  banner('КОЗЫРЬ '+SUITS[S.trump]);
+  startBout();
+}
+function makeDurakDeck(){
+  var d=[];
+  for(var s=0;s<4;s++)for(var v=1;v<=6;v++)d.push({value:v, suit:s});
+  return shuffle(d);
+}
+function defBeats(def,att){
+  if(def.suit===att.suit)return def.value>att.value;
+  return def.suit===S.trump;
+}
+function tableValues(){
+  var vs={};
+  S.table.forEach(function(p){vs[p.a.value]=1; if(p.d)vs[p.d.value]=1;});
+  return vs;
+}
+function canThrow(die){
+  if(S.table.length===0)return true;
+  return !!tableValues()[die.value];
+}
+function undefendedIdx(){
+  for(var i=0;i<S.table.length;i++)if(!S.table[i].d)return i;
+  return -1;
+}
+function dieLabel(d){return d.value+SUITS[d.suit];}
+
+function startBout(){
+  S.table=[];
+  var defH=S.attacker==='p'?S.eHand:S.pHand;
+  S.maxAtt=Math.min(6,defH.length);
+  if(checkDurakEnd())return;
+  if(S.attacker==='p'){S.phase='pAttack'; busy=false; render();}
+  else{S.phase='busy'; busy=true; render(); schedule(aiAttack,1000);}
+}
+function refillHands(){
+  var order=S.attacker==='p'?[S.pHand,S.eHand]:[S.eHand,S.pHand];
+  order.forEach(function(h){while(h.length<6&&S.talon.length)h.push(S.talon.pop());});
+}
+function checkDurakEnd(){
+  if(S.talon.length>0)return false;
+  var p0=S.pHand.length===0, e0=S.eHand.length===0;
+  if(!p0&&!e0)return false;
+  busy=true; S.phase='over'; render();
+  var title,text;
+  if(p0&&e0){title='НИЧЬЯ'; text='Оба вышли одновременно — дуракубов сегодня нет.';}
+  else if(p0){title='ПОБЕДА!'; text='Ты вышел первым. Враг — Дуракуб!';}
+  else{title='ДУРАКУБ!'; text='Ты остался с кубами. Дуракуб — это ты.';}
+  var key=S.modeKey;
+  schedule(function(){showOverlay(title,text,'Ещё раз',function(){startMode(key);});},700);
+  return true;
+}
+function boutBeaten(){
+  S.discard+=S.table.length*2;
+  S.table=[];
+  refillHands();
+  S.attacker=S.attacker==='p'?'e':'p';
+  startBout();
+}
+function boutTaken(taker){
+  var hand=taker==='p'?S.pHand:S.eHand;
+  S.table.forEach(function(p){
+    hand.push(p.a);
+    if(p.d)hand.push(p.d);
+  });
+  S.table=[];
+  refillHands();
+  startBout();
+}
+
+function playerAttackDie(i){
+  if(S.phase!=='pAttack')return;
+  var die=S.pHand[i];
+  if(!canThrow(die)||S.table.length>=S.maxAtt||S.eHand.length===0)return;
+  S.pHand.splice(i,1);
+  S.table.push({a:die,d:null});
+  S.phase='busy'; busy=true; render();
+  schedule(aiDefend,900);
+}
+function aiDefend(){
+  var idx=undefendedIdx();
+  if(idx<0){S.phase='pAttack'; busy=false; render(); return;}
+  var att=S.table[idx].a;
+  var best=-1, bc=1e9;
+  S.eHand.forEach(function(d,i){
+    if(!defBeats(d,att))return;
+    var cost=d.value+(d.suit===S.trump?8:0);
+    if(cost<bc){bc=cost; best=i;}
+  });
+  if(best<0){
+    toast('Враг не отбился — забирает стол',true);
+    schedule(function(){boutTaken('e');},900);
+    return;
+  }
+  var d=S.eHand.splice(best,1)[0];
+  S.table[idx].d=d;
+  toast('Враг отбил '+dieLabel(att)+' кубом '+dieLabel(d),true);
+  S.phase='pAttack'; busy=false; render();
+}
+function playerBito(){
+  if(S.phase!=='pAttack'||!S.table.length||undefendedIdx()>=0)return;
+  S.phase='busy'; busy=true; render();
+  toast('Бито');
+  schedule(boutBeaten,600);
+}
+
+function aiAttack(){
+  var best=-1, bc=1e9;
+  S.eHand.forEach(function(d,i){
+    var c=d.value+(d.suit===S.trump?8:0);
+    if(c<bc){bc=c; best=i;}
+  });
+  if(best<0){boutBeaten(); return;}
+  var d=S.eHand.splice(best,1)[0];
+  S.table.push({a:d,d:null});
+  toast('Враг атакует: '+dieLabel(d),true);
+  S.phase='pDefend'; busy=false; render();
+}
+function playerDefendDie(i){
+  if(S.phase!=='pDefend')return;
+  var idx=undefendedIdx(); if(idx<0)return;
+  var att=S.table[idx].a, d=S.pHand[i];
+  if(!defBeats(d,att))return;
+  S.pHand.splice(i,1);
+  S.table[idx].d=d;
+  S.phase='busy'; busy=true; render();
+  schedule(aiThrow,900);
+}
+function aiThrow(){
+  if(S.table.length>=S.maxAtt||S.pHand.length===0){
+    toast('Бито — враг закончил атаку',true);
+    schedule(boutBeaten,700); return;
+  }
+  var vs=tableValues();
+  var best=-1, bc=1e9;
+  S.eHand.forEach(function(d,i){
+    if(!vs[d.value])return;
+    if(S.talon.length>2&&(d.value>4||d.suit===S.trump))return;
+    var c=d.value+(d.suit===S.trump?8:0);
+    if(c<bc){bc=c; best=i;}
+  });
+  if(best<0){
+    toast('Бито — враг закончил атаку',true);
+    schedule(boutBeaten,700); return;
+  }
+  var d=S.eHand.splice(best,1)[0];
+  S.table.push({a:d,d:null});
+  toast('Враг подкидывает: '+dieLabel(d),true);
+  S.phase='pDefend'; busy=false; render();
+}
+function playerTake(){
+  if(S.phase!=='pDefend')return;
+  S.phase='busy'; busy=true; render();
+  toast('Ты забираешь стол');
+  schedule(function(){boutTaken('p');},700);
+}
+
+function renderDurak(){
+  $('summary').innerHTML='';
+  $('pHearts').innerHTML=''; $('eHearts').innerHTML='';
+  $('pScore').textContent=S.pHand.length;
+  $('eScore').textContent=S.eHand.length;
+  $('pDeck').textContent='Колода: '+S.talon.length;
+  $('eDeck').textContent='Бито: '+S.discard;
+  $('eHand').innerHTML=S.eHand.map(function(){return'<div class="mini"></div>';}).join('');
+  $('turninfo').textContent='КОЗЫРЬ '+SUITS[S.trump]+' · СТОЛ '+S.table.length+'/'+S.maxAtt;
+  var w=$('whose');
+  if(S.phase==='pAttack'){w.textContent='ТЫ АТАКУЕШЬ'; w.className='me';}
+  else if(S.phase==='pDefend'){w.textContent='ОТБИВАЙСЯ!'; w.className='foe';}
+  else{w.textContent='ХОД ВРАГА'; w.className='foe';}
+
+  var bd=$('board'); bd.classList.add('durak');
+  var html='';
+  for(var i=0;i<6;i++){
+    var p=S.table[i], inner='';
+    if(p){
+      inner+='<div class="die small atk su'+p.a.suit+'"><span class="val pixel">'+p.a.value+'</span>'
+        +'<span class="sbadge'+(p.a.suit===S.trump?' trg':'')+'">'+SUITS[p.a.suit]+'</span></div>';
+      if(p.d)inner+='<div class="die small dfn su'+p.d.suit+'"><span class="val pixel">'+p.d.value+'</span>'
+        +'<span class="sbadge'+(p.d.suit===S.trump?' trg':'')+'">'+SUITS[p.d.suit]+'</span></div>';
+    }
+    html+='<div class="cell">'+inner+'</div>';
+  }
+  bd.innerHTML=html;
+
+  var validIdx=[];
+  if(S.phase==='pAttack'){
+    var can=S.table.length<S.maxAtt&&S.eHand.length>0;
+    if(can)S.pHand.forEach(function(d,i){if(canThrow(d))validIdx.push(i);});
+  }else if(S.phase==='pDefend'){
+    var idx=undefendedIdx();
+    if(idx>=0){var att=S.table[idx].a; S.pHand.forEach(function(d,i){if(defBeats(d,att))validIdx.push(i);});}
+  }
+  $('pHand').className='wrap';
+  $('pHand').innerHTML=S.pHand.map(function(d,i){
+    var ok=validIdx.indexOf(i)>=0;
+    return'<div class="hdie su'+d.suit+(ok?' ok':' disabled')+'" data-h="'+i+'">'
+      +'<span class="val pixel">'+d.value+'</span>'
+      +'<span class="sbadge'+(d.suit===S.trump?' trg':'')+'">'+SUITS[d.suit]+'</span></div>';
+  }).join('');
+
+  if(S.phase==='pAttack'){
+    $('selinfo').innerHTML=S.table.length===0
+      ?'Атакуй любым кубом.'
+      :'Подкинь куб со значением как на столе или жми «Бито».';
+  }else if(S.phase==='pDefend'){
+    var ui=undefendedIdx();
+    if(ui>=0){
+      var a=S.table[ui].a;
+      $('selinfo').innerHTML='Побей <b>'+dieLabel(a)+'</b>: старше той же масти или козырем '+SUITS[S.trump]+'.';
+    }else $('selinfo').innerHTML='';
+  }else $('selinfo').innerHTML='Враг думает…';
+
+  var ab=$('actionbar'); ab.innerHTML='';
+  if(S.phase==='pAttack'&&S.table.length&&undefendedIdx()<0){
+    var b1=document.createElement('button');
+    b1.className='btn'; b1.textContent='Бито';
+    b1.onclick=playerBito; ab.appendChild(b1);
+  }
+  if(S.phase==='pDefend'){
+    var b2=document.createElement('button');
+    b2.className='btn'; b2.textContent='Взять';
+    b2.onclick=playerTake; ab.appendChild(b2);
+  }
+
+  var hd=document.querySelectorAll('#pHand .hdie.ok');
+  for(var q=0;q<hd.length;q++){
+    hd[q].onclick=function(){
+      var i=+this.getAttribute('data-h');
+      if(S.phase==='pAttack')playerAttackDie(i);
+      else if(S.phase==='pDefend')playerDefendDie(i);
+    };
+  }
+}
+
+
+/* ---------------- эффекты и подсказки ---------------- */
+function findHint(){
+  if(S.cfg.kind==='durak')return null;
+  var cur=comboBonus(ownerVals(S.board,'p')).b;
+  var best=null;
+  S.pHand.forEach(function(d,hi){
+    legalTargets(d,'p').forEach(function(ci){
+      var b=S.board.map(function(c){return c?{v:c.v,owner:c.owner}:null;});
+      var v=d.value;
+      if(b[ci]&&d.type==='warlock')v=b[ci].v;
+      b[ci]={v:v,owner:'p'};
+      if(d.type==='friendly')b[ci].v=Math.min(v+neighborSum(b,ci),12);
+      var cb=comboBonus(ownerVals(b,'p'));
+      if(cb.b-cur>=10&&(!best||cb.b>best.b))best={hi:hi,ci:ci,b:cb.b,n:cb.n.replace('!','')};
+    });
+  });
+  return best;
+}
+function floatScore(cellIdx,text,cls){
+  var cells=document.querySelectorAll('#board .cell');
+  var el=cells[cellIdx]; if(!el)return;
+  var r=el.getBoundingClientRect();
+  var f=document.createElement('div');
+  f.className='floatpts'+(cls?' '+cls:'');
+  f.textContent=text;
+  f.style.left=(r.left+r.width/2)+'px';
+  f.style.top=(r.top+r.height/3)+'px';
+  document.body.appendChild(f);
+  setTimeout(function(){if(f.parentNode)f.parentNode.removeChild(f);},1400);
+}
+function comboCells(owner,cb){
+  var res=[];
+  S.board.forEach(function(c,i){
+    if(c&&c.owner===owner&&cb.vals.indexOf(c.v)>=0)res.push(i);
+  });
+  return res;
+}
+function spawnFly(ev,cx,cy,onArrive){
+  var cells=document.querySelectorAll('#board .cell');
+  var el=(ev.ci!=null&&cells[ev.ci])?cells[ev.ci]:$('board');
+  var r=el.getBoundingClientRect();
+  var f=document.createElement('div');
+  f.className='flypts'+(ev.cls?' '+ev.cls:'');
+  f.textContent=ev.label;
+  f.style.left=(r.left+r.width/2)+'px';
+  f.style.top=(r.top+r.height/2)+'px';
+  document.body.appendChild(f);
+  void f.offsetWidth;
+  f.style.left=cx+'px'; f.style.top=cy+'px';
+  f.style.opacity='0.15';
+  f.style.transform='translate(-50%,-50%) scale(.45)';
+  setTimeout(function(){
+    if(f.parentNode)f.parentNode.removeChild(f);
+    if(onArrive)onArrive();
+  },570);
+}
+function playScoreSequence(owner,events){
+  var br=$('board').getBoundingClientRect();
+  var cx=br.left+br.width/2, cy=br.top+br.height/2;
+  var sum=document.createElement('div');
+  sum.className='sumfx'+(owner==='e'?' foe':'');
+  sum.style.left=cx+'px'; sum.style.top=cy+'px';
+  document.body.appendChild(sum);
+  var acc=0, i=0;
+  function step(){
+    if(i>=events.length){
+      sum.textContent=(acc>=0?'+':'')+acc;
+      sum.classList.add('final');
+      setTimeout(function(){if(sum.parentNode)sum.parentNode.removeChild(sum);},950);
+      return;
+    }
+    var ev=events[i++];
+    if(ev.hl){
+      var cells=document.querySelectorAll('#board .cell');
+      ev.hl.forEach(function(ci){
+        if(cells[ci]){
+          var d=cells[ci].querySelector('.die');
+          if(d){
+            d.classList.remove('pop');
+            d.classList.add('glow');
+            setTimeout(function(){d.classList.remove('glow');},760);
+          }
+        }
+      });
+    }
+    spawnFly(ev,cx,cy,function(){
+      acc+=ev.amt;
+      sum.textContent=(acc>=0?'+':'')+acc;
+      sum.classList.add('bump');
+      setTimeout(function(){sum.classList.remove('bump');},180);
+    });
+    setTimeout(step,450);
+  }
+  step();
+}
+
+function renderHistory(){
+  var box=$('summary');
+  if(!S||!S.history||!S.history.length){box.innerHTML=''; return;}
+  var selIdx=(S.histSel>=0&&S.histSel<S.history.length)?S.histSel:S.history.length-1;
+  var strip='<div id="histStrip">'+S.history.map(function(m,i){
+    var foe=m.who==='e';
+    return'<div class="hpill'+(foe?' foe':'')+(i===selIdx?' act':'')+'" data-hh="'+i+'">'
+      +'<span>'+m.n+'</span><span class="pv'+(m.pts<0?' neg':'')+'">'+(m.mined?'💥':Math.abs(m.pts))+'</span></div>';
+  }).join('')+'</div>';
+  var m=S.history[selIdx], foe=m.who==='e';
+  var chips=m.parts.map(function(p){
+    var vhtml='';
+    if(p.v!=null){
+      if(p.die)vhtml='<span class="dval">'+p.v+'</span><span class="plus">'+(p.pts||0)+'</span>';
+      else vhtml='<span class="'+(p.neg?'minus':'plus')+'">'+p.v+'</span>';
+    }
+    return'<span class="hchip">'+(p.icon?p.icon+' ':'')+p.t+vhtml+'</span>';
+  }).join('');
+  box.innerHTML=strip
+    +'<div class="hcard'+(foe?' foe':'')+'">'
+    +'<div class="hhdr"><span class="hwho">'+(foe?'ХОД ВРАГА':'ТВОЙ ХОД')+' '+m.n+'</span>'
+    +'<span class="htot'+(m.pts<0?' neg':'')+'">'+(m.mined?'💥 0':Math.abs(m.pts))+'</span></div>'
+    +(m.parts.length?'<div class="hchips">'+chips+'</div>':'')
+    +'</div>';
+  var st=box.querySelector('#histStrip');
+  if(S.histSel<0)st.scrollLeft=st.scrollWidth;
+  var ps=box.querySelectorAll('.hpill');
+  for(var q=0;q<ps.length;q++){
+    ps[q].onclick=function(){S.histSel=+this.getAttribute('data-hh'); renderHistory();};
+  }
 }
 
 /* ---------------- rendering ---------------- */
 function hearts(n){
-  let s='';
-  for(let i=0;i<LIVES;i++)s+='<span class="'+(i<n?'on':'off')+'">♥</span>';
+  var s='';
+  for(var i=0;i<LIVESMAX;i++)s+='<span class="'+(i<n?'on':'off')+'">♥</span>';
+  return s;
+}
+function winMarks(w){
+  var s='';
+  for(var i=0;i<2;i++)s+='<span class="'+(i<w?'won':'woff')+'">★</span>';
   return s;
 }
 function dieBadge(piece,viewerIsOwner){
-  const t=TYPES[piece.type];
+  var t=TYPES[piece.type];
   if(!t.icon)return'';
   if(t.hidden&&!viewerIsOwner)return'';
   return'<span class="badge">'+t.icon+'</span>';
 }
 function render(){
-  $('pHearts').innerHTML=hearts(S.pLives);
-  $('eHearts').innerHTML=hearts(S.eLives);
-  $('pScore').textContent=S.pScore;
-  $('eScore').textContent=S.eScore;
+  if(S.cfg.kind==='durak'){renderDurak(); return;}
+  $('board').classList.remove('durak');
+  $('pHand').className='';
+  $('actionbar').innerHTML='';
+  var k=S.cfg.kind;
+  if(k==='lives'){
+    $('pHearts').innerHTML=hearts(S.pLives);
+    $('eHearts').innerHTML=hearts(S.eLives);
+  }else if(k==='bo3'){
+    $('pHearts').innerHTML=winMarks(S.pWins);
+    $('eHearts').innerHTML=winMarks(S.eWins);
+  }else{
+    $('pHearts').innerHTML=''; $('eHearts').innerHTML='';
+  }
+  $('pScore').textContent=k==='race'?S.pScore+'/'+S.cfg.target:S.pScore;
+  $('eScore').textContent=k==='race'?S.eScore+'/'+S.cfg.target:S.eScore;
   $('pDeck').textContent='Колода: '+S.pDeck.length;
   $('eDeck').textContent='Колода: '+S.eDeck.length;
-  $('eHand').innerHTML=S.eHand.map(()=>'<div class="mini"></div>').join('');
-  const curMoves=Math.min(moves(S.turn)+1,MOVES);
-  $('turninfo').textContent='РАУНД '+S.round+' · ХОД '+curMoves+'/'+MOVES;
-  const w=$('whose');
+  $('eHand').innerHTML=S.eHand.map(function(){return'<div class="mini"></div>';}).join('');
+  var curMoves=Math.min(moves(S.turn)+1,S.cfg.moves);
+  var rlabel=(k==='bo3')?('РАУНД '+S.round+'/3'):('РАУНД '+S.round);
+  $('turninfo').textContent=rlabel+' · ХОД '+curMoves+'/'+S.cfg.moves;
+  var w=$('whose');
   w.textContent=S.turn==='p'?'ТВОЙ ХОД':'ХОД ВРАГА';
   w.className=S.turn==='p'?'me':'foe';
 
-  // board
-  const valid=(sel!==null&&!busy)?legalTargets(S.pHand[sel],'p'):[];
-  $('board').innerHTML=S.board.map((c,i)=>{
-    const v=valid.includes(i);
-    let inner='';
+  var valid=(sel!==null&&!busy&&S.pHand[sel])?legalTargets(S.pHand[sel],'p'):[];
+  var hint=(!busy&&S.turn==='p')?findHint():null;
+  $('board').innerHTML=S.board.map(function(c,i){
+    var v=valid.indexOf(i)>=0;
+    var hc=hint&&sel===hint.hi&&i===hint.ci;
+    var inner='';
     if(c){
-      const own=c.owner==='p';
+      var own=c.owner==='p';
       inner='<div class="die '+(own?'p':'e')+(c.shield>0?' shielded':'')+(fx.placed===i?' pop':'')+'">'
         +'<span class="val pixel">'+c.v+'</span>'
         +dieBadge(c,own)
         +(c.shield>0?'<span class="sh">🛡'+c.shield+'</span>':'')
         +'</div>';
     }
-    return'<div class="cell'+(v?' valid':'')+(v&&c?' hasdie':'')+(fx.boom.includes(i)?' boom':'')
+    return'<div class="cell'+(v?' valid':'')+(v&&c?' hasdie':'')+(hc?' hintcell':'')+(fx.boom.indexOf(i)>=0?' boom':'')
       +'" data-i="'+i+'">'+inner+'</div>';
   }).join('');
   fx={placed:-1,boom:[]};
 
-  // hand
-  $('pHand').innerHTML=S.pHand.map((d,i)=>{
-    const t=TYPES[d.type];
-    return'<div class="hdie'+(sel===i?' sel':'')+((busy||S.turn!=='p')?' disabled':'')+'" data-h="'+i+'">'
+  $('pHand').innerHTML=S.pHand.map(function(d,i){
+    var t=TYPES[d.type];
+    return'<div class="hdie'+(sel===i?' sel':'')+(hint&&hint.hi===i?' hint':'')+((busy||S.turn!=='p')?' disabled':'')+'" data-h="'+i+'">'
       +'<span class="val pixel">'+d.value+'</span>'
       +(t.icon?'<span class="badge">'+t.icon+'</span>':'')
       +'</div>';
   }).join('');
 
-  // selection info
-  if(sel!==null&&S.pHand[sel]){
-    const d=S.pHand[sel], t=TYPES[d.type];
-    $('selinfo').innerHTML='<b>'+t.name+' '+d.value+'</b> — '+t.desc+' Выбери подсвеченную клетку.';
+  if(sel!==null&&hint&&sel===hint.hi){
+    $('selinfo').innerHTML='<span class="tip">💡 Поставь на светящуюся клетку — <b>'+hint.n+' +'+hint.b+'</b>!</span>';
+  }else if(sel!==null&&S.pHand[sel]){
+    var d=S.pHand[sel], tt=TYPES[d.type];
+    $('selinfo').innerHTML='<b>'+tt.name+' '+d.value+'</b> — '+tt.desc+' Выбери подсвеченную клетку.';
+  }else if(hint){
+    $('selinfo').innerHTML='<span class="tip">💡 Светящийся куб соберёт <b>'+hint.n+' +'+hint.b+'</b>!</span>';
   }else{
     $('selinfo').innerHTML=S.turn==='p'?'Выбери куб в руке.':'Враг думает…';
   }
-
   bindEvents();
 }
 function bindEvents(){
-  document.querySelectorAll('.hdie').forEach(el=>{
-    el.onclick=()=>{
+  var hd=document.querySelectorAll('.hdie');
+  for(var a=0;a<hd.length;a++){
+    hd[a].onclick=function(){
       if(busy||S.turn!=='p')return;
-      const i=+el.dataset.h;
+      var i=+this.getAttribute('data-h');
       sel=(sel===i)?null:i;
       render();
     };
-  });
-  document.querySelectorAll('.cell').forEach(el=>{
-    el.onclick=()=>{
+  }
+  var cs=document.querySelectorAll('.cell');
+  for(var b=0;b<cs.length;b++){
+    cs[b].onclick=function(){
       if(busy||S.turn!=='p'||sel===null)return;
-      const i=+el.dataset.i;
-      if(!legalTargets(S.pHand[sel],'p').includes(i))return;
+      var i=+this.getAttribute('data-i');
+      if(legalTargets(S.pHand[sel],'p').indexOf(i)<0)return;
       busy=true;
       doMove('p',sel,i);
     };
-  });
+  }
 }
 
-let toastTimer=null;
 function toast(msg,foe){
-  const t=$('toast');
+  var t=$('toast');
   t.textContent=msg;
   t.className=foe?'foe':'';
 }
 function banner(msg){
-  const b=$('banner');
+  var b=$('banner');
   b.textContent=msg;
   b.classList.remove('show');
   void b.offsetWidth;
@@ -553,11 +1313,13 @@ function showOverlay(title,text,btn,cb){
   $('ovTitle').textContent=title;
   $('ovText').textContent=text;
   $('ovBtn').textContent=btn;
-  $('ovBtn').onclick=()=>{$('overlay').classList.remove('show');cb();};
+  $('ovBtn').onclick=function(){$('overlay').classList.remove('show');cb();};
   $('overlay').classList.add('show');
 }
+$('ovBtn2').onclick=function(){$('overlay').classList.remove('show');showMenu();};
+$('menuBtn').onclick=function(){showMenu();};
 
-newGame();
+showMenu();
 </script>
 </body>
 </html>
