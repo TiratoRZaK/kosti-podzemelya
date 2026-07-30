@@ -379,7 +379,7 @@ body{
     <li>🦔 <b>Шипы</b> — скрыт; съевший теряет 10 очков</li>
     <li>💣 <b>Мина</b> — скрыта; уничтожает себя и атакующего, ход сгорает</li>
     <li>🤝 <b>Дружелюбный</b> — прибавляет к себе сумму значений всех соседей (макс 12)</li>
-    <li>🔮 <b>Колдун</b> — ест любой куб и копирует его значение</li>
+    <li>🔮 <b>Колдун</b> — ест куб с любым значением и копирует его; щит не пробивает</li>
     <h3 class="pixel">Режимы</h3>
     <li><b>Классика</b> и <b>Большая доска</b> — по 3 жизни, проигравший раунд теряет ♥.</li>
     <li><b>Своя колода</b> — 18 кубов на 3 раунда, у врага та же колода. Кто взял 2 раунда — победил.</li>
@@ -402,7 +402,7 @@ var TYPES={
   mine:    {icon:'💣', name:'Мина',         desc:'Скрыта. Взрывает себя и атакующего, ход сгорает.', hidden:true},
   jaw:     {icon:'🦷', name:'Челюсть',      desc:'При выставлении съедает вражеский куб справа.'},
   friendly:{icon:'🤝', name:'Дружелюбный',  desc:'Прибавляет к себе сумму значений всех соседей (макс 12).'},
-  warlock: {icon:'🔮', name:'Колдун',       desc:'Ест любой куб и копирует его значение.'}
+  warlock: {icon:'🔮', name:'Колдун',       desc:'Ест куб любого значения и копирует его. Щит не пробивает.'}
 };
 var WEIGHTS=[['basic',50],['shield',9],['spikes',9],['mine',7],['jaw',9],['friendly',8],['warlock',8]];
 
@@ -525,7 +525,8 @@ function schedule(fn,ms){
 }
 function newRound(){
   S.round++;
-  S.board=Array(S.cfg.cells).fill(null);
+  S.board=[];
+  for(var bi=0;bi<S.cfg.cells;bi++)S.board.push(null);
   S.pMoves=0; S.eMoves=0;
   if(S.cfg.kind!=='race'){S.pScore=0; S.eScore=0;}
   if(S.cfg.deck==='perRound'){
@@ -651,6 +652,9 @@ function doMove(owner,handIdx,cellIdx){
     }
   }
 
+  // мина: ход сгорает без подсчёта — уколы шипов тоже не начисляются
+  if(mined)spikesHit=0;
+
   // щиты противника выгорают после этого хода
   S.board.forEach(function(c){if(c&&c.owner!==owner&&c.shield>0)c.shield--;});
 
@@ -712,7 +716,7 @@ function doMove(owner,handIdx,cellIdx){
 
   // мгновенная победа в гонке
   if(S.cfg.kind==='race'&&(S.pScore>=S.cfg.target||S.eScore>=S.cfg.target)){
-    banner('500!');
+    banner(S.cfg.target+'!');
     busy=true;
     schedule(matchEnd,seqDur+300);
     return;
