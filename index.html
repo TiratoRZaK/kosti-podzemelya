@@ -45,6 +45,10 @@ body{
 .hearts .on{color:var(--danger);} .hearts .off{color:#3a2b42;}
 .hearts .won{color:var(--gold-lt);} .hearts .woff{color:#3a2b42;}
 .score{font-size:14px; color:var(--gold-lt);}
+.score small{font-family:Rubik; font-size:10px; color:var(--muted); margin-left:4px;}
+/* минусовой счёт — по общему правилу: красное = очки ушли */
+.score.neg{color:#ff8a7e;}
+.score small.neg{color:#ff8a7e;}
 .deckcount{font-size:11px; color:var(--muted);}
 #eHand{display:flex; gap:5px; margin-top:6px;}
 .mini{width:22px; height:22px; border-radius:5px; background:linear-gradient(#3a2140,#241326); border:2px solid #4d2c47;}
@@ -110,6 +114,8 @@ body{
   position:fixed; left:50%; top:38%; transform:translate(-50%,-50%) scale(.8);
   font-size:17px; color:var(--gold-lt); text-shadow:0 4px 0 #000, 0 0 24px rgba(217,161,60,.8);
   opacity:0; pointer-events:none; z-index:40; white-space:nowrap;
+  /* подложка: баннер выпадает поверх доски, без неё цифры кубов читаются сквозь текст */
+  padding:10px 16px; border-radius:12px; background:rgba(8,5,14,.82);
 }
 #banner.show{animation:bann 1.3s ease;}
 @keyframes bann{0%{opacity:0; transform:translate(-50%,-50%) scale(.6);} 20%{opacity:1; transform:translate(-50%,-50%) scale(1.15);} 40%{transform:translate(-50%,-50%) scale(1);} 80%{opacity:1;} 100%{opacity:0;}}
@@ -659,7 +665,6 @@ function doMove(owner,handIdx,cellIdx){
   S.board.forEach(function(c){if(c&&c.owner!==owner&&c.shield>0)c.shield--;});
 
   var gain=0, parts=[], cbHit=null;
-  var placedNow=S.board[cellIdx];
   if(!mined){
     if(eatPts){gain+=eatPts; if(!warlockAte)parts.push({t:'Съел', v:eatPts});}
     if(jawPts)gain+=jawPts;
@@ -674,9 +679,11 @@ function doMove(owner,handIdx,cellIdx){
   }else{
     parts=xparts;
   }
+  // счёт меняется ровно на итог хода — без обрезки в 0, иначе карточка показывает
+  // одно число, а счётчик двигается на другое
   var delta=gain-spikesHit;
-  if(owner==='p')S.pScore=Math.max(0,S.pScore+delta);
-  else S.eScore=Math.max(0,S.eScore+delta);
+  if(owner==='p')S.pScore+=delta;
+  else S.eScore+=delta;
 
   incMoves(owner);
   sel=null;
@@ -689,22 +696,26 @@ function doMove(owner,handIdx,cellIdx){
   var seqDur=900;
   if(mined){
     floatScore(cellIdx,'💥','combo');
+    buzz([40,60,140]);
   }else{
     var events=[];
     if(eatPts)events.push({ci:cellIdx, label:(warlockAte?'🔮 +':'+')+eatPts, amt:eatPts});
     if(jawPts)events.push({ci:cellIdx, label:'🦷 +'+jawPts, amt:jawPts});
-    if(placedNow&&placedNow.owner===owner)
-      events.push({ci:cellIdx, label:'+'+placedNow.v, amt:placedNow.v});
-    S.board.forEach(function(c,i){
-      if(c&&c.owner===owner&&i!==cellIdx)
-        events.push({ci:i, label:'+'+c.v, amt:c.v});
-    });
+    // рента летит ОДНИМ числом с подсветкой всех своих кубов — как и в карточке хода
+    // одним жетоном «Кубы на поле». Раньше было по числу на каждый куб, и пауза до
+    // следующего хода росла вместе с доской (в 3×3 доходило до 6 секунд).
+    if(bs){
+      var mineCells=[];
+      S.board.forEach(function(c,i){if(c&&c.owner===owner)mineCells.push(i);});
+      events.push({ci:cellIdx, label:'+'+bs, amt:bs, hl:mineCells});
+    }
     if(cbHit){
       var hl=comboCells(owner,cbHit);
       events.push({ci:hl.length?hl[0]:cellIdx, label:cbHit.n.replace('!','')+' +'+cbHit.b, amt:cbHit.b, cls:'combo', hl:hl});
       if(cbHit.b>=25){
         var bd=$('board'); bd.classList.add('comboflash');
         setTimeout(function(){bd.classList.remove('comboflash');},750);
+        buzz([18,40,18]);
       }
     }
     if(spikesHit)events.push({ci:cellIdx, label:'🦔 −'+spikesHit, amt:-spikesHit, cls:'foe'});
@@ -732,7 +743,11 @@ function advance(){
   S.turn=next;
   if(!hasLegal(next)){
     toast(S.hotseat?(pname(next)+': нет ходов — пас'):(next==='p'?'У тебя нет ходов — пас':'У врага нет ходов — пас'), next==='e');
-    incMoves(next); render();
+    // пас тоже попадает в ленту, иначе в истории два хода одного игрока подряд
+    // без объяснения, куда девался ход другого
+    S.history.push({n:S.history.length+1, who:next, pts:0, parts:[{t:'Пас — нет ходов', icon:'⏭'}], mined:false});
+    S.histSel=-1;
+    incMoves(next); render(); renderHistory();
     schedule(advance,800); return;
   }
   busy=(next==='e'&&!S.hotseat);
@@ -810,7 +825,7 @@ function evalMove(die,ci,owner){
   var b=S.board.map(function(c){return c?{v:c.v,type:c.type,owner:c.owner,shield:c.shield}:null;});
   var gain=0;
   var t=b[ci];
-  var piece={v:die.value,type:die.type,owner:owner,shield:0};
+  var piece={v:die.value,type:die.type,owner:owner,shield:die.type==='shield'?2:0};
   if(t){
     if(die.type==='warlock')piece.v=t.v;
     gain+=t.v*2; // съедение + лишение врага дохода (ИИ не знает про шипы/мины)
@@ -825,6 +840,11 @@ function evalMove(die,ci,owner){
   }
   gain+=boardSum(b,owner);
   gain+=comboBonus(ownerVals(b,owner)).b;
+  // щит нельзя съесть два хода — эта рента гарантированно доживёт до следующего хода
+  if(die.type==='shield')gain+=piece.v;
+  // сколько комбо отняли у противника: без этого ИИ не мешал игроку собирать пары
+  var opp=owner==='p'?'e':'p';
+  gain+=comboBonus(ownerVals(S.board,opp)).b-comboBonus(ownerVals(b,opp)).b;
   if(S.cfg.winBy==='count'){
     gain+=ownerCount(b,owner)*10;
     if(t)gain+=10;
@@ -836,7 +856,9 @@ function enemyTurn(){
   var best=null;
   S.eHand.forEach(function(die,hi){
     legalTargets(die,'e').forEach(function(ci){
-      var sc=evalMove(die,ci,'e')+Math.random()*5;
+      // шум пропорционален оценке: фиксированные +5 при gain в сотни ИИ не расшатывали
+      var raw=evalMove(die,ci,'e');
+      var sc=raw+Math.random()*Math.max(4,raw*0.06);
       if(!best||sc>best.sc)best={hi:hi,ci:ci,sc:sc};
     });
   });
@@ -1228,6 +1250,13 @@ function hearts(n){
   for(var i=0;i<LIVESMAX;i++)s+='<span class="'+(i<n?'on':'off')+'">♥</span>';
   return s;
 }
+// согласование числа: 1 куб, 2 куба, 5 кубов
+function plural(n,one,few,many){
+  var m10=n%10, m100=n%100;
+  if(m10===1&&m100!==11)return one;
+  if(m10>=2&&m10<=4&&(m100<10||m100>=20))return few;
+  return many;
+}
 function winMarks(w){
   var s='';
   for(var i=0;i<2;i++)s+='<span class="'+(i<w?'won':'woff')+'">★</span>';
@@ -1254,8 +1283,21 @@ function render(){
   }else{
     $('pHearts').innerHTML=''; $('eHearts').innerHTML='';
   }
-  $('pScore').textContent=k==='race'?S.pScore+'/'+S.cfg.target:S.pScore;
-  $('eScore').textContent=k==='race'?S.eScore+'/'+S.cfg.target:S.eScore;
+  if(S.cfg.winBy==='count'){
+    // раунд берёт тот, чьих кубов на поле больше — крупно кубы, очки мелким
+    // (они решают только при равных раундах)
+    // крупно кубы — они решают раунд; красным помечаются только очки, если ушли в минус
+    var pc=ownerCount(S.board,'p'), ec=ownerCount(S.board,'e');
+    $('pScore').innerHTML=pc+'<small'+(S.pScore<0?' class="neg"':'')+'>'+plural(pc,'куб','куба','кубов')+' · '+S.pScore+' очк.</small>';
+    $('eScore').innerHTML=ec+'<small'+(S.eScore<0?' class="neg"':'')+'>'+plural(ec,'куб','куба','кубов')+' · '+S.eScore+' очк.</small>';
+  }else{
+    $('pScore').textContent=k==='race'?S.pScore+'/'+S.cfg.target:S.pScore;
+    $('eScore').textContent=k==='race'?S.eScore+'/'+S.cfg.target:S.eScore;
+  }
+  // в режиме по числу кубов крупная цифра — это кубы, её красить нельзя
+  var negOk=(S.cfg.winBy!=='count');
+  $('pScore').className='score pixel'+(negOk&&S.pScore<0?' neg':'');
+  $('eScore').className='score pixel'+(negOk&&S.eScore<0?' neg':'');
   $('pDeck').textContent='Колода: '+S.pDeck.length;
   $('eDeck').textContent='Колода: '+S.eDeck.length;
   $('eHand').innerHTML=S.eHand.map(function(){return'<div class="mini"></div>';}).join('');
@@ -1342,6 +1384,11 @@ function toast(msg,foe){
   var t=$('toast');
   t.textContent=msg;
   t.className=foe?'foe':'';
+}
+// тактильный отклик; iOS его не поддерживает — там просто ничего не произойдёт
+function buzz(pattern){
+  if(typeof navigator==='undefined'||!navigator.vibrate)return;
+  try{navigator.vibrate(pattern);}catch(e){}
 }
 function banner(msg){
   var b=$('banner');
