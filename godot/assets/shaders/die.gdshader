@@ -73,19 +73,15 @@ void fragment() {
 	float alpha = max(a_face, a_deep);
 	vec3 out_rgb = mix(deep_col.rgb, col, a_face);
 
-	// Щит: обводка идёт по силуэту ВСЕГО куба — объединению грани и нижней фаски.
-	// Раньше она шла по контуру одной грани, а грань кончается выше низа куба:
-	// внизу рамка обрывалась и выглядела «не по размеру». Внутрь от обводки
-	// добавлен мягкий налив, чтобы щит читался и на мелком кубе в руке.
-	// Линия идёт с отступом внутрь: если вести её по самому краю, она перекрывает
-	// кромку и нижнюю фаску, и куб выглядит плоским.
+	// Щит: мягкое свечение внутрь от края грани, без всякой линии. Обводка по
+	// контуру выглядела наклеенной рамкой — сколько её ни утончай, она читается
+	// как чужеродная деталь. Сам знак щита рисует иконка поверх куба.
 	float d_all = min(d_face, d_deep);
 	float a_all = 1.0 - smoothstep(0.0, aa, d_all);
-	float inset = max(3.0, short_side * 0.055);
-	float half_w = max(1.0, short_side * 0.014);          // полуширина линии
-	float ring = abs(d_all + inset);
-	float shield_band = (1.0 - smoothstep(half_w, half_w + 0.9, ring)) * a_all;
-	out_rgb = mix(out_rgb, shield_col.rgb, shield_band * shielded);
+	// узкая полоса у самого края и слабо: при широкой ауре костяной куб зеленел,
+	// а кровавый отдавал бирюзой — цвет владельца важнее подсветки
+	float aura = (1.0 - smoothstep(0.0, short_side * 0.14, abs(d_all))) * a_all;
+	out_rgb = mix(out_rgb, shield_col.rgb, pow(aura, 1.4) * shielded * 0.3);
 
 	out_rgb = mix(out_rgb, glow_col.rgb, halo * 0.75);
 	alpha = max(alpha, halo);

@@ -2179,7 +2179,7 @@ func _after_move() -> void:
 				return
 			busy = true
 			var rp := _round_phrases(String(out["winner"]), String(out["detail"]))
-			await _round_fanfare(String(out["winner"]))
+			await _round_fanfare(String(out["winner"]), String(out["detail"]))
 			_show_result(String(rp["title"]), String(rp["text"]), "Следующий раунд", func():
 				if opponent == "remote" and lan != null and lan.connected:
 					lan.send_next_round()
@@ -2233,18 +2233,25 @@ func _who_name(st: Dictionary, seat: String) -> String:
 ## Исход раунда до появления окна: свой раунд — золотая вспышка и баннер, чужой —
 ## красная и тряска. Раньше раунд просто заканчивался диалогом, и было непонятно,
 ## случилось хорошее или плохое.
-func _round_fanfare(winner: String) -> void:
+func _round_fanfare(winner: String, detail: String) -> void:
 	var mine := _my_view(state)
+	# счёт идёт прямо в баннере: «раунд за соперником» без числа не говорит,
+	# насколько всё плохо
 	if winner == "":
-		banner("НИЧЬЯ В РАУНДЕ")
+		banner("НИЧЬЯ В РАУНДЕ
+%s" % detail)
 		_flash_screen(Color(0.6, 0.6, 0.7, 0.22), 0.35)
 	elif winner == mine:
 		buzz(70)
-		banner("РАУНД ТВОЙ!" if _solo(state) else MatchState.seat_name(state, winner).to_upper() + "!")
+		var head := "РАУНД ТВОЙ!" if _solo(state) else MatchState.seat_name(state, winner).to_upper() + "!"
+		banner("%s
+%s" % [head, detail])
 		_flash_screen(Color(1, 0.82, 0.35, 0.3), 0.45)
 	else:
 		buzz(160)
-		banner("РАУНД ЗА СОПЕРНИКОМ" if _solo(state) else MatchState.seat_name(state, winner).to_upper() + "!")
+		var head2 := "РАУНД ЗА СОПЕРНИКОМ" if _solo(state) else MatchState.seat_name(state, winner).to_upper() + "!"
+		banner("%s
+%s" % [head2, detail])
 		_flash_screen(Color(0.9, 0.2, 0.2, 0.32), 0.45)
 		_shake(10.0, 0.4)
 	# окно исхода ждёт, пока баннер отыграет: иначе он ляжет поверх кнопок
