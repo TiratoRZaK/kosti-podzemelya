@@ -130,10 +130,12 @@ func _reset_shift() -> void:
 	if _shake_tween != null and _shake_tween.is_valid():
 		_shake_tween.kill()
 	_shake_tween = null
+	_set_shake_offset(Vector2.ZERO)
+	# на всякий случай подчищаем и контейнеры: прежние сборки двигали их, и
+	# сдвиг мог остаться в отступах
 	for box in [battle_root, durak_root]:
 		if box != null:
 			box.position = Vector2.ZERO
-	_shake_home = Vector2.ZERO
 
 ## Отступы по безопасной зоне устройства. У телефона снизу жестовая полоса или
 ## кнопки навигации, сверху вырез — без этого нижняя часть экрана (рука и кнопки)
@@ -239,6 +241,8 @@ func _parse_args() -> void:
 			_shot_mode = "shield"
 		elif a == "--shot-fx":
 			_shot_mode = "fx"
+		elif a == "--shot-shake":
+			_shot_mode = "shake"
 		elif a == "--shot-name":
 			_shot_mode = "name_ask"
 		elif a == "--shot-modes":
@@ -2511,27 +2515,43 @@ func _cell_center(idx: int) -> Vector2:
 ## Истинное положение экрана, к которому тряска обязана вернуться. Хранится
 ## отдельно: если два толчка наложатся, второй запомнил бы уже сдвинутое
 ## положение — и после серии экран так и остался бы съехавшим за край.
-var _shake_home := Vector2.ZERO
 var _shake_tween: Tween
 
+## Тряска сдвигает весь холст, а не контейнер экрана.
+##
+## Двигать контейнер нельзя: он привязан к краям экрана, и сдвиг сохраняется в
+## его отступах. Стоило двум толчкам наложиться или анимации оборваться — и
+## интерфейс залипал съехавшим за край, играть было нечем. У холста же нет
+## никакого «своего» положения: сброс в единицу возвращает всё точно на место,
+## что бы до этого ни случилось.
 func _shake(power: float = 7.0, time: float = 0.28) -> void:
-	var box: Control = durak_root if in_durak else battle_root
-	if box == null:
-		return
 	if _shake_tween != null and _shake_tween.is_valid():
-		_shake_tween.kill()          # прежний толчок добивать нельзя, он утащит экран
-		box.position = _shake_home
-	else:
-		_shake_home = box.position
+		_shake_tween.kill()
+	_set_shake_offset(Vector2.ZERO)
 	var tw := create_tween()
 	_shake_tween = tw
 	var steps := 6
 	for i in steps:
 		var k := 1.0 - float(i) / float(steps)
 		var off := Vector2(rng.randf_range(-power, power), rng.randf_range(-power, power)) * k
-		tw.tween_property(box, "position", _shake_home + off, time / float(steps))
-	tw.tween_property(box, "position", _shake_home, time / float(steps))
-	tw.tween_callback(func(): _shake_tween = null)
+		tw.tween_method(_set_shake_offset, _shake_offset_of(i, steps, power), off, time / float(steps))
+	tw.tween_method(_set_shake_offset, Vector2.ZERO, Vector2.ZERO, 0.01)
+	tw.tween_callback(func():
+		_set_shake_offset(Vector2.ZERO)
+		_shake_tween = null
+	)
+
+## Промежуточное смещение шага: начинаем с текущего, чтобы не было рывка.
+func _shake_offset_of(i: int, steps: int, power: float) -> Vector2:
+	if i == 0:
+		return Vector2.ZERO
+	var k := 1.0 - float(i - 1) / float(steps)
+	return Vector2(rng.randf_range(-power, power), rng.randf_range(-power, power)) * k
+
+func _set_shake_offset(off: Vector2) -> void:
+	var vp := get_viewport()
+	if vp != null:
+		vp.canvas_transform = Transform2D(0.0, off)
 
 ## Короткая вспышка на весь экран — для взрыва и крупных событий.
 func _flash_screen(col: Color, time: float = 0.3) -> void:
@@ -2804,6 +2824,17 @@ func _shot_scenario() -> void:
 			# второй шаг меню: выбор режима после выбора вида игры
 			_show_modes()
 			await get_tree().process_frame
+		"shake":
+			# три толчка подряд, как при взрыве вместе с итогом хода: экран обязан
+			# вернуться ровно на место, иначе им нельзя управлять
+			opponent = "bot"
+			_start_mode("classic")
+			_shake(12.0, 0.45)
+			_shake(7.0, 0.3)
+			await get_tree().create_timer(0.15).timeout
+			_shake(4.0, 0.2)
+			await get_tree().create_timer(1.2).timeout
+			print("смещение холста после тряски: ", get_viewport().canvas_transform.origin)
 		"fx":
 			# челюсть жуёт куб с шипами: за один ход и укол, и «пережевал» — видно
 			# сразу оба новых знака на доске
