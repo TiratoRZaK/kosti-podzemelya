@@ -22,7 +22,7 @@ const MAX_TABLE := 6
 # --------------------------------------------------------------- создание
 
 static func new_game(seed_value: int, opponent: String, my_seat: String = "p",
-		foe_name: String = "Соперник") -> Dictionary:
+		foe_name: String = "Соперник", my_name: String = "") -> Dictionary:
 	var order := ["p", "e"]
 	var players := {}
 	for seat in order:
@@ -30,7 +30,7 @@ static func new_game(seed_value: int, opponent: String, my_seat: String = "p",
 	var state := {
 		"mode": "durak", "kind": "durak", "seed": seed_value,
 		"order": order, "players": players,
-		"seats": MatchState.make_seats(opponent, my_seat, foe_name),
+		"seats": MatchState.make_seats(opponent, my_seat, foe_name, my_name),
 		"talon": [], "discard": 0, "trump": 0,
 		"table": [], "attacker": "p", "max_att": MAX_TABLE,
 		"phase": "attack", "shown_to": "", "over": false, "outcome": {},

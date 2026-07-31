@@ -19,7 +19,7 @@ var state: Dictionary
 var rng := RandomNumberGenerator.new()
 var opponent := "bot"            # bot | human (хотсит) | remote (по сети)
 var my_seat := "p"               # своё сиденье: у клиента по сети — второе
-var foe_device := "Соперник"     # имя устройства соперника, приходит по сети
+var foe_player := "Соперник"     # имя соперника, приходит по сети при знакомстве
 var lan: Lan
 var lobby_layer: Control
 var lobby_box: VBoxContainer
@@ -58,6 +58,7 @@ var _banner_tween: Tween
 var banner_panel: PanelContainer
 var _shot_path := ""
 var _shot_mode := ""
+var _wall_rect: TextureRect          # фон ждёт фоновой загрузки, см. _process
 
 # Дуракуб: своя машина состояний (Durak) и свой экран. Боевая раскладка ему не
 # годится — нет ни очков, ни жизней, ни истории ходов, зато есть стол из пар.
@@ -85,14 +86,36 @@ var d_talon: Label
 var rules_battle_box: VBoxContainer
 var rules_durak_box: VBoxContainer
 var menu_note: Label
+var menu_hint: Label
+var kind_box: VBoxContainer        # шаг 1 меню: с кем играем
+var modes_box: VBoxContainer       # шаг 2 меню: во что играем
+var name_layer: Control
+var name_input: LineEdit
+var name_error: Label
+var name_cancel: Button
 
 func _ready() -> void:
 	_parse_args()
 	rng.seed = 20260731
 	_build_ui()
 	_show_menu()
+	# имя спрашиваем один раз за установку; снимки экранов этим не тормозим
+	if _shot_path == "" and not Profile.has_name():
+		_show_name_screen(true)
 	if _shot_path != "":
 		await _shot_scenario()
+
+## Фон подставляем, когда фоновый поток его дочитает. Пока не готов — на экране
+## заливка, и меню уже нажимается: запуск не ждёт декода текстуры.
+func _process(_dt: float) -> void:
+	if _wall_rect == null:
+		return
+	var status := ResourceLoader.load_threaded_get_status(BG_TEXTURE)
+	if status == ResourceLoader.THREAD_LOAD_LOADED:
+		_wall_rect.texture = ResourceLoader.load_threaded_get(BG_TEXTURE)
+		_wall_rect = null
+	elif status == ResourceLoader.THREAD_LOAD_FAILED or status == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+		_wall_rect = null
 
 func _parse_args() -> void:
 	for a in OS.get_cmdline_args() + OS.get_cmdline_user_args():
@@ -136,6 +159,10 @@ func _parse_args() -> void:
 			_shot_mode = "durak_lose"
 		elif a == "--shot-shield":
 			_shot_mode = "shield"
+		elif a == "--shot-name":
+			_shot_mode = "name_ask"
+		elif a == "--shot-modes":
+			_shot_mode = "modes"
 
 # ------------------------------------------------------------------ вид
 
@@ -170,7 +197,10 @@ func _build_ui() -> void:
 	# фактура видна, но интерфейс остаётся главным.
 	if ResourceLoader.exists(BG_TEXTURE):
 		var wall := TextureRect.new()
-		wall.texture = load(BG_TEXTURE)
+		# картинку ждём не на старте: меню появляется сразу на заливке, а кладка
+		# доезжает следующими кадрами. Так первый кадр не зависит от декода текстуры
+		ResourceLoader.load_threaded_request(BG_TEXTURE)
+		_wall_rect = wall
 		wall.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 		wall.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 		wall.modulate = Color(0.66, 0.6, 0.82, 0.85)
@@ -780,7 +810,7 @@ func _start_durak(seed_value: int = -1) -> void:
 	var sd := seed_value if seed_value >= 0 else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
 	if seed_value < 0 and opponent == "remote" and lan != null and lan.is_host:
 		lan.send_start("durak", sd)
-	d_state = Durak.new_game(sd, opponent, my_seat, foe_device)
+	d_state = Durak.new_game(sd, opponent, my_seat, foe_player, Profile.display_name())
 	d_toast("")
 	busy = true
 	_d_refresh()
@@ -1030,9 +1060,9 @@ func _build_menu() -> Control:
 	var t := _label("КОСТИ\nПОДЗЕМЕЛЬЯ", 24, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(t)
-	var hint := _label("Выбери режим", 12, Palette.MUTED)
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v.add_child(hint)
+	menu_hint = _label("", 12, Palette.MUTED)
+	menu_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(menu_hint)
 	# сообщения, пока открыто меню: обычный тост лежит под этим слоем и не виден
 	menu_note = _label("", 11, Palette.GOLD_LIGHT)
 	menu_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1040,23 +1070,81 @@ func _build_menu() -> Control:
 	menu_note.custom_minimum_size.x = 300
 	v.add_child(menu_note)
 
-	var toggle := CheckBox.new()
-	toggle.text = "2 игрока на одном телефоне"
-	toggle.add_theme_font_size_override("font_size", 13)
-	toggle.add_theme_color_override("font_color", Palette.TEXT)
-	toggle.toggled.connect(func(on: bool): opponent = "human" if on else "bot")
-	v.add_child(toggle)
-
-	for key in MatchState.MODE_ORDER:
-		v.add_child(_mode_button(key, MatchState.MODES[key]))
-	v.add_child(_mode_button("durak", MatchState.DURAK_MODE))
-	var lan_btn := _button("Играть по Wi-Fi")
-	lan_btn.pressed.connect(_show_lobby)
-	v.add_child(lan_btn)
+	# Шаг 1: с кем играем. Раньше вместо этого был чекбокс «2 игрока на одном
+	# телефоне» рядом с режимами — из него не читалось, что игр вообще три вида.
+	kind_box = VBoxContainer.new()
+	kind_box.add_theme_constant_override("separation", 8)
+	v.add_child(kind_box)
+	kind_box.add_child(_kind_button("Одиночная", "против бота", func():
+		opponent = "bot"
+		_show_modes()
+	))
+	kind_box.add_child(_kind_button("Двое на одном телефоне", "по очереди, с ширмой при передаче", func():
+		opponent = "human"
+		_show_modes()
+	))
+	kind_box.add_child(_kind_button("По Wi-Fi", "с другом рядом, в одной сети Wi-Fi", func():
+		_show_lobby()
+	))
+	kind_box.add_child(_kind_button("По сети", "пока не доступно", Callable(), true))
+	var name_btn := _button("Сменить имя", true)
+	name_btn.pressed.connect(func(): _show_name_screen(false))
+	kind_box.add_child(name_btn)
 	var quit_btn := _button("Выход", true)
 	quit_btn.pressed.connect(func(): get_tree().quit())
-	v.add_child(quit_btn)
+	kind_box.add_child(quit_btn)
+
+	# Шаг 2: режим. Тот же список, что был, плюс возврат к выбору вида игры.
+	modes_box = VBoxContainer.new()
+	modes_box.add_theme_constant_override("separation", 8)
+	modes_box.visible = false
+	v.add_child(modes_box)
+	for key in MatchState.MODE_ORDER:
+		modes_box.add_child(_mode_button(key, MatchState.MODES[key]))
+	modes_box.add_child(_mode_button("durak", MatchState.DURAK_MODE))
+	var back_btn := _button("Назад", true)
+	back_btn.pressed.connect(_show_kinds)
+	modes_box.add_child(back_btn)
 	return layer
+
+## Кнопка вида игры: название и пояснение. Недоступный вид показываем, но не
+## включаем — иначе непонятно, что сетевая игра планируется.
+func _kind_button(title: String, sub: String, on_press: Callable, disabled: bool = false) -> Control:
+	var box := PanelContainer.new()
+	box.add_theme_stylebox_override("panel", _mode_box())
+	box.custom_minimum_size.x = 300
+	if disabled:
+		box.modulate = Color(1, 1, 1, 0.45)
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	else:
+		box.mouse_filter = Control.MOUSE_FILTER_STOP
+		box.gui_input.connect(func(e: InputEvent):
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				on_press.call()
+		)
+	var inner := VBoxContainer.new()
+	inner.add_theme_constant_override("separation", 3)
+	inner.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(inner)
+	inner.add_child(_label(title, 14, Palette.GOLD_LIGHT))
+	var s := _label(sub, 11, Palette.MUTED)
+	s.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	s.custom_minimum_size.x = 268
+	s.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	inner.add_child(s)
+	return box
+
+## Шаг 1 меню: с кем играем.
+func _show_kinds() -> void:
+	kind_box.visible = true
+	modes_box.visible = false
+	menu_hint.text = "Привет, %s! С кем играем?" % Profile.display_name()
+
+## Шаг 2 меню: во что играем.
+func _show_modes() -> void:
+	kind_box.visible = false
+	modes_box.visible = true
+	menu_hint.text = "Выбери режим"
 
 ## Кнопка режима: название и описание отдельными строками с переносом.
 ## Это PanelContainer, а не Button: у кнопки высоту приходится задавать руками, и
@@ -1081,6 +1169,78 @@ func _mode_button(key: String, cfg: Dictionary) -> Control:
 	s.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	inner.add_child(s)
 	return box
+
+## Экран имени: спрашивается один раз при первом запуске, потом доступен из меню.
+## Имя видят соперники по Wi-Fi, поэтому об этом честно предупреждаем.
+func _build_name_screen() -> Control:
+	var layer := _full_dim(0.98)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := _panel(Palette.PANEL_2)
+	center.add_child(panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 10)
+	v.custom_minimum_size.x = 300
+	panel.add_child(v)
+	var t := _label("КАК ТЕБЯ ЗВАТЬ?", 20, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(t)
+	var sub := _label("Имя будет стоять в игре и увидят соперники по Wi-Fi.", 11, Palette.MUTED)
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	sub.custom_minimum_size.x = 290
+	v.add_child(sub)
+	name_input = LineEdit.new()
+	name_input.max_length = Profile.MAX_LEN
+	name_input.placeholder_text = "Игрок"
+	name_input.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_input.custom_minimum_size.y = 44
+	name_input.add_theme_font_size_override("font_size", 16)
+	name_input.text_submitted.connect(func(_t: String): _save_name())
+	v.add_child(name_input)
+	name_error = _label("", 11, Palette.NEG)
+	name_error.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_error.custom_minimum_size.y = 16
+	v.add_child(name_error)
+	var ok := _button("Готово")
+	ok.pressed.connect(_save_name)
+	v.add_child(ok)
+	name_cancel = _button("Отмена", true)
+	name_cancel.pressed.connect(func():
+		name_layer.visible = false
+		_show_menu()
+	)
+	v.add_child(name_cancel)
+	return layer
+
+## first_run — экран нельзя закрыть, пока имя не введено: без него дальше игра
+## подписывала бы игрока безликим «Игрок».
+func _show_name_screen(first_run: bool) -> void:
+	if name_layer == null:
+		name_layer = _build_name_screen()
+		add_child(name_layer)
+	name_input.text = Profile.player_name()
+	name_error.text = ""
+	name_cancel.visible = not first_run
+	name_layer.visible = true
+	menu_layer.visible = not first_run
+	name_input.grab_focus()
+
+func _save_name() -> void:
+	if not Profile.save_name(name_input.text):
+		name_error.text = "Впиши хотя бы одну букву."
+		return
+	name_layer.visible = false
+	# имя своего сиденья меняем и в идущей партии, чтобы не ждать следующей
+	for st in [state, d_state]:
+		if not st.is_empty() and st.has("seats"):
+			for seat in st["order"]:
+				if String(st["seats"][seat]["kind"]) == "human" and bool(st["seats"][seat]["local"]) \
+						and (not MatchState.shared_device(st) or seat == "p"):
+					st["seats"][seat]["name"] = Profile.display_name()
+	_show_menu()
+	_refresh_screen()
 
 func _build_veil() -> Control:
 	# ширма плотная: сквозь неё не должно просвечивать поле с чужими ловушками
@@ -1196,13 +1356,13 @@ func _lobby_message(text: String, with_back: bool = true) -> void:
 
 func _lan_host() -> void:
 	_ensure_lan()
-	# представляемся моделью устройства: соперник увидит «Redmi Note 12», а не IP
-	if not lan.start_host(Lan.device_name()):
+	# представляемся именем профиля: соперник увидит «Рустам», а не IP или модель
+	if not lan.start_host(Profile.display_name()):
 		_lobby_message("Не удалось открыть игру: порт занят. Закрой другую копию игры и попробуй снова.")
 		return
 	my_seat = "p"
 	opponent = "remote"
-	_lobby_message("Ждём соперника…\nПусть он нажмёт «Найти игру».\n\nТвоё устройство: %s" % Lan.device_name())
+	_lobby_message("Ждём соперника…\nПусть он нажмёт «Найти игру».\n\nТебя найдут как: %s" % Profile.display_name())
 
 func _lan_find() -> void:
 	_ensure_lan()
@@ -1232,19 +1392,25 @@ func _on_lan_hosts(list: Array) -> void:
 	var t := _label("НАЙДЕННЫЕ ИГРЫ", 18, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lobby_box.add_child(t)
+	# считаем тёзок: два «Игрока» в списке не различить, тогда добавим адрес
+	var seen := {}
 	for h in list:
-		# имя устройства крупно, IP не показываем совсем — он ни о чём не говорит.
-		# Если рядом два одинаковых телефона, различить поможет последний октет.
+		var nm := String(h["name"])
+		seen[nm] = int(seen.get(nm, 0)) + 1
+	for h in list:
+		# показываем имя игрока, IP не показываем — он ни о чём не говорит
 		var addr := String(h["address"])
 		var tail := addr.substr(addr.rfind(".") + 1)
 		var label := String(h["name"])
-		if label == "" or label == "GenericDevice":
-			label = "Устройство %s" % tail
+		if label == "":
+			label = "Игрок %s" % tail
+		elif int(seen.get(label, 0)) > 1:
+			label = "%s · %s" % [label, tail]
 		var b := _button(label)
 		b.pressed.connect(func():
 			my_seat = "e"       # у клиента своё сиденье второе
 			opponent = "remote"
-			foe_device = String(h["name"])
+			foe_player = String(h["name"])
 			if not lan.join(String(h["address"])):
 				_lobby_message("Не удалось подключиться. Попробуй ещё раз.")
 			else:
@@ -1256,15 +1422,15 @@ func _on_lan_hosts(list: Array) -> void:
 	lobby_box.add_child(back)
 
 func _on_lan_peer_named(name_of_peer: String) -> void:
-	if name_of_peer == "" or name_of_peer == "GenericDevice":
+	if name_of_peer == "":
 		return
-	foe_device = name_of_peer
+	foe_player = name_of_peer
 	# имя могло прийти уже после начала партии — подставляем на месте
 	for st in [state, d_state]:
 		if not st.is_empty() and st.has("seats"):
 			for seat in st["order"]:
 				if String(st["seats"][seat]["kind"]) == "remote":
-					st["seats"][seat]["name"] = foe_device
+					st["seats"][seat]["name"] = foe_player
 	_refresh_screen()
 
 func _on_lan_connected() -> void:
@@ -1273,7 +1439,10 @@ func _on_lan_connected() -> void:
 		# хост выбирает режим; клиент ждёт объявления партии
 		lobby_layer.visible = false
 		menu_layer.visible = true
-		menu_note.text = "Соперник подключился — выбери режим."
+		# сразу второй шаг: на первом хост выбрал бы «Одиночную» и порвал сетевую
+		# партию, ведь тот экран переставляет opponent
+		_show_modes()
+		menu_note.text = "%s подключился — выбери режим." % foe_player
 	else:
 		_lobby_message("Подключились! Ждём, пока хост выберет режим…", false)
 
@@ -1296,7 +1465,7 @@ func _on_lan_match_started(mode: String, seed_value: int) -> void:
 	d_state = {}
 	durak_layer.visible = false
 	battle_root.visible = true
-	state = MatchState.new_match(mode, seed_value, "remote", my_seat, foe_device)
+	state = MatchState.new_match(mode, seed_value, "remote", my_seat, foe_player, Profile.display_name())
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -1438,6 +1607,7 @@ func _show_menu() -> void:
 	veil_layer.visible = false
 	over_layer.visible = false
 	menu_note.text = ""
+	_show_kinds()          # меню всегда открывается с выбора вида игры
 	_hide_banner()
 
 func _show_rules() -> void:
@@ -1464,7 +1634,7 @@ func _start_mode(key: String) -> void:
 	var seed_value := int(Time.get_unix_time_from_system()) & 0x7fffffff
 	if opponent == "remote" and lan != null and lan.is_host:
 		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
-	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_device)
+	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name())
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -2241,6 +2411,14 @@ func _shot_scenario() -> void:
 			var res_big := MatchState.play(state, "p", 0, 0)
 			_refresh()
 			await _play_card(res_big)
+		"name_ask":
+			# первый запуск: спрашиваем имя, отменить нельзя
+			_show_name_screen(true)
+			await get_tree().process_frame
+		"modes":
+			# второй шаг меню: выбор режима после выбора вида игры
+			_show_modes()
+			await get_tree().process_frame
 		"shield":
 			# щиты крупно и мелко: обводка обязана идти по краю всего куба, включая
 			# нижнюю фаску, иначе она читается как «рамка не по размеру»
@@ -2353,6 +2531,12 @@ func _shot_scenario() -> void:
 		_:
 			_start_mode("classic")
 	for i in 4:
+		await get_tree().process_frame
+	# фон грузится в фоновом потоке — на снимке он должен успеть появиться,
+	# иначе кадр врёт про оформление
+	var waited := 0
+	while _wall_rect != null and waited < 60:
+		waited += 1
 		await get_tree().process_frame
 	var img := get_viewport().get_texture().get_image()
 	img.save_png(_shot_path)
