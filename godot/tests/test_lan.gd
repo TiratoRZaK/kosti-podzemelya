@@ -100,6 +100,12 @@ func run() -> void:
 	check(synced, "после %d ходов состояния совпадают" % moves_done,
 		"хост: %s | клиент: %s" % [_board(host_state), _board(client_state)])
 
+	# путь узла — часть сетевого протокола: разойдётся, и пакеты будут отброшены
+	var probe := Lan.new()
+	check(probe.name == Lan.NODE_NAME, "у узла сети постоянное имя, а не автоматическое",
+		"имя=%s" % probe.name)
+	probe.free()
+
 	durak_case()
 
 	client.close()

@@ -1542,6 +1542,7 @@ func _ensure_lan() -> void:
 	if lan != null:
 		return
 	lan = Lan.new()
+	lan.name = Lan.NODE_NAME       # путь узла обязан совпадать на обоих устройствах
 	add_child(lan)
 	lan.peer_connected.connect(_on_lan_connected)
 	lan.peer_lost.connect(_on_lan_lost)

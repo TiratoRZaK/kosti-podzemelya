@@ -45,6 +45,15 @@ var _udp: PacketPeerUDP
 var _discovering := false
 var _found: Array = []
 
+## Имя узла задаётся жёстко, и это обязательно: сетевой вызов адресуется по пути
+## узла в дереве, а безымянному узлу Godot присваивает имя со счётчиком, которое
+## на двух устройствах может не совпасть. Тогда соединение есть, но пакеты
+## отбрасываются с «Requested node was not found», и партия не начинается.
+const NODE_NAME := "Lan"
+
+func _init() -> void:
+	name = NODE_NAME
+
 func _ready() -> void:
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
