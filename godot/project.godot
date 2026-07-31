@@ -16,6 +16,10 @@ boot_splash/show_image=false
 boot_splash/bg_color=Color(0.055, 0.039, 0.078, 1)
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
+[audio]
+
+driver/driver="Dummy"
+
 [display]
 
 window/size/viewport_width=390

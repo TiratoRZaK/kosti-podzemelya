@@ -124,11 +124,23 @@ func _report_boot() -> void:
 	var ui := Time.get_ticks_msec() - _boot_ms
 	boot_note.text = "запуск: движок %d мс · интерфейс %d мс" % [_boot_ms, ui]
 
+## Вернуть экран на место. Тряска двигает контейнер, и если её оборвало сменой
+## режима или раунда, интерфейс остался бы съехавшим — управлять им нельзя.
+func _reset_shift() -> void:
+	if _shake_tween != null and _shake_tween.is_valid():
+		_shake_tween.kill()
+	_shake_tween = null
+	for box in [battle_root, durak_root]:
+		if box != null:
+			box.position = Vector2.ZERO
+	_shake_home = Vector2.ZERO
+
 ## Отступы по безопасной зоне устройства. У телефона снизу жестовая полоса или
 ## кнопки навигации, сверху вырез — без этого нижняя часть экрана (рука и кнопки)
 ## уезжала под системную панель, особенно на большой доске, где всё и так плотно.
 ## В вебе ту же задачу решает env(safe-area-inset-*).
 func _apply_safe_area() -> void:
+	_reset_shift()
 	var win := DisplayServer.window_get_size()
 	var vp := get_viewport_rect().size
 	var pad := 14.0
@@ -865,6 +877,7 @@ func _d_update_hint(me: String, valid: Array) -> void:
 ## seed_value < 0 — партию начинаем сами и, если играем по сети, объявляем сид
 ## сопернику; иначе сид пришёл от хоста и раздача у обоих совпадёт.
 func _start_durak(seed_value: int = -1) -> void:
+	_reset_shift()
 	menu_layer.visible = false
 	over_layer.visible = false
 	in_durak = true
@@ -1753,6 +1766,7 @@ func _build_overlay() -> Control:
 # ----------------------------------------------------------------- меню
 
 func _show_menu() -> void:
+	_reset_shift()
 	menu_layer.visible = true
 	veil_layer.visible = false
 	over_layer.visible = false
@@ -1774,6 +1788,7 @@ func _start_mode(key: String) -> void:
 	if key == "durak":
 		await _start_durak()
 		return
+	_reset_shift()
 	menu_layer.visible = false
 	over_layer.visible = false
 	in_durak = false
@@ -2493,18 +2508,30 @@ func _cell_center(idx: int) -> Vector2:
 	return slot.global_position + slot.size * 0.5
 
 ## Тряска экрана. Дёргаем корневой контейнер, а не камеру: интерфейс её не знает.
+## Истинное положение экрана, к которому тряска обязана вернуться. Хранится
+## отдельно: если два толчка наложатся, второй запомнил бы уже сдвинутое
+## положение — и после серии экран так и остался бы съехавшим за край.
+var _shake_home := Vector2.ZERO
+var _shake_tween: Tween
+
 func _shake(power: float = 7.0, time: float = 0.28) -> void:
 	var box: Control = durak_root if in_durak else battle_root
 	if box == null:
 		return
-	var home := box.position
+	if _shake_tween != null and _shake_tween.is_valid():
+		_shake_tween.kill()          # прежний толчок добивать нельзя, он утащит экран
+		box.position = _shake_home
+	else:
+		_shake_home = box.position
 	var tw := create_tween()
+	_shake_tween = tw
 	var steps := 6
 	for i in steps:
 		var k := 1.0 - float(i) / float(steps)
 		var off := Vector2(rng.randf_range(-power, power), rng.randf_range(-power, power)) * k
-		tw.tween_property(box, "position", home + off, time / float(steps))
-	tw.tween_property(box, "position", home, time / float(steps))
+		tw.tween_property(box, "position", _shake_home + off, time / float(steps))
+	tw.tween_property(box, "position", _shake_home, time / float(steps))
+	tw.tween_callback(func(): _shake_tween = null)
 
 ## Короткая вспышка на весь экран — для взрыва и крупных событий.
 func _flash_screen(col: Color, time: float = 0.3) -> void:
