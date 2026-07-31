@@ -19,6 +19,8 @@ uniform float thickness : hint_range(0.0, 0.3) = 0.10; // «толщина» к�
 uniform float edge_w : hint_range(0.0, 0.1) = 0.022;
 uniform float glow : hint_range(0.0, 1.0) = 0.0;       // вспышка при отдаче очков
 uniform float select : hint_range(0.0, 1.0) = 0.0;     // подсветка выбранного
+uniform float shielded : hint_range(0.0, 1.0) = 0.0;   // куб под щитом — его не съесть
+uniform vec4 shield_col : source_color = vec4(0.38, 0.76, 0.79, 1.0);
 uniform vec2 rect_size = vec2(74.0, 74.0);
 
 // расстояние до скруглённого прямоугольника: <0 внутри, >0 снаружи
@@ -63,6 +65,13 @@ void fragment() {
 	// кромка
 	float edge_band = smoothstep(-edge_w * short_side, 0.0, d_face);
 	vec3 col = mix(face, edge_col.rgb, edge_band);
+
+	// щит: кромка идёт по тому же контуру, что и грань, поэтому обводка точно
+	// повторяет скругление и фаску. Нарисованный поверх прямоугольник этого не
+	// умел и «сидел не по размеру».
+	float shield_w = edge_w * short_side * 2.2;
+	float shield_band = (1.0 - smoothstep(shield_w, shield_w + 1.5, abs(d_face)));
+	col = mix(col, shield_col.rgb, shield_band * shielded);
 
 	// свечение: изнутри к центру, плюс ореол при выборе
 	col += glow_col.rgb * glow * (0.55 + 0.45 * (1.0 - smoothstep(0.0, face_half.y, length(face_p))));

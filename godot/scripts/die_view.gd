@@ -90,6 +90,8 @@ func _apply() -> void:
 	_mat.set_shader_parameter("edge_col", f["edge"])
 	_mat.set_shader_parameter("deep_col", f["deep"])
 	_mat.set_shader_parameter("glow_col", Palette.GOLD_LIGHT)
+	_mat.set_shader_parameter("shield_col", Palette.CYAN)
+	_mat.set_shader_parameter("shielded", 1.0 if shield_charges > 0 else 0.0)
 	_value_label.text = str(value)
 	_value_label.add_theme_color_override("font_color", f["ink"])
 	var icon := String(Rules.TYPES[type_id]["icon"])
@@ -157,15 +159,11 @@ func _get_param(param: String) -> float:
 	var v = _mat.get_shader_parameter(param)
 	return 0.0 if v == null else float(v)
 
-## Заряды щита: сегменты сверху плюс обводка по контуру. Обводка нужна, чтобы
-## сразу читалось «этот куб не съесть»: одних сегментов мало — игрок тыкал в
-## защищённый куб и не понимал, почему ход не проходит.
+## Заряды щита: сегменты сверху. Сама обводка «этот куб не съесть» рисуется
+## шейдером — там она идёт по контуру грани и совпадает со скруглением.
 func _draw_pips() -> void:
 	if shield_charges <= 0 and type_id != "shield":
 		return
-	if shield_charges > 0:
-		var r := Rect2(Vector2(1, 1), size - Vector2(2, size.y * 0.10))
-		_pips.draw_rect(r, Palette.CYAN, false, maxf(2.0, size.y * 0.035))
 	var seg := Vector2(size.x * 0.2, maxf(3.0, size.y * 0.055))
 	var gap := seg.x * 0.4
 	var total := seg.x * Rules.SHIELD_CHARGES + gap * (Rules.SHIELD_CHARGES - 1)

@@ -49,6 +49,7 @@ var veil_layer: Control
 var veil_title: Label
 var over_layer: Control
 
+var _banner_tween: Tween
 var _shot_path := ""
 var _shot_mode := ""
 
@@ -72,6 +73,12 @@ func _parse_args() -> void:
 			_shot_mode = "menu"
 		elif a == "--shot-rules":
 			_shot_mode = "rules"
+		elif a == "--shot-round":
+			_shot_mode = "round"
+		elif a == "--shot-win":
+			_shot_mode = "win"
+		elif a == "--shot-hotseat-round":
+			_shot_mode = "hotseat_round"
 
 # ------------------------------------------------------------------ вид
 
@@ -530,7 +537,17 @@ func _hide_veil() -> void:
 	busy = false
 	_refresh()
 
+func _hide_banner() -> void:
+	# баннер живёт своей анимацией и успевает наложиться на кнопки оверлея.
+	# Гасить одну альфу недостаточно — твин её тут же поднимает обратно.
+	if _banner_tween != null and _banner_tween.is_valid():
+		_banner_tween.kill()
+	var panel := get_node_or_null("BannerPanel")
+	if panel != null:
+		panel.modulate.a = 0.0
+
 func _show_result(title: String, detail: String, button: String, on_press: Callable) -> void:
+	_hide_banner()
 	var box: VBoxContainer = over_layer.get_node("CenterContainer/Panel/Box") if over_layer.has_node("CenterContainer/Panel/Box") else null
 	if box == null:
 		# CenterContainer добавляется без имени, ищем по типу
@@ -658,7 +675,7 @@ func _score_text(seat: String, kind: String, cfg: Dictionary) -> String:
 		return "%d/%d" % [sc, int(cfg["target"])]
 	if String(cfg.get("win_by", "")) == "count":
 		var n := Rules.owner_count(state["board"], seat)
-		return "%d куб · %d" % [n, sc]
+		return "%d %s · %d очк." % [n, _plural(n, "куб", "куба", "кубов"), sc]
 	return str(sc)
 
 func _rebuild_board(me: String) -> void:
@@ -778,29 +795,24 @@ func _after_move() -> void:
 	match String(ev["event"]):
 		"round_end":
 			var out := MatchState.close_round(state)
+			_refresh()   # жизни и звёзды уже списаны — показать до оверлея
 			var final := MatchState.match_outcome(state)
 			if bool(out["match_over"]):
-				var who := String(final["winner"])
-				var title := "НИЧЬЯ" if who == "" else (MatchState.seat_name(state, who).to_upper() + " ПОБЕДИЛ!")
-				if who == "p" and MatchState.seat_kind(state, "e") == "bot":
-					title = "ПОБЕДА!"
-				elif who == "e" and MatchState.seat_kind(state, "e") == "bot":
-					title = "ПОРАЖЕНИЕ"
 				busy = true
-				_show_result(title, String(final["detail"]), "Ещё раз", func(): _start_mode(String(state["mode"])))
+				var fin := _match_phrases(String(final["winner"]))
+				_show_result(String(fin["title"]), String(fin["text"]), "Ещё раз",
+					func(): _start_mode(String(state["mode"])))
 				return
-			# против бота обращаемся на «ты», иначе выходит «ТЫ БЕРЁТ РАУНД»
-			var rtitle := "НИЧЬЯ В РАУНДЕ"
-			var rw := String(out["winner"])
-			if rw != "":
-				if MatchState.seat_kind(state, "e") == "bot":
-					rtitle = "РАУНД ТВОЙ!" if rw == "p" else "РАУНД ЗА ВРАГОМ"
-				else:
-					rtitle = MatchState.seat_name(state, rw).to_upper() + " БЕРЁТ РАУНД"
 			busy = true
-			_show_result(rtitle, String(out["detail"]), "Следующий раунд", func():
+			var rp := _round_phrases(String(out["winner"]), String(out["detail"]))
+			_show_result(String(rp["title"]), String(rp["text"]), "Следующий раунд", func():
 				MatchState.new_round(state)
+				hist_sel = -1
+				for c in card_box.get_children():
+					c.queue_free()
+				toast("")
 				_refresh()
+				banner("РАУНД %d" % int(state["round"]))
 				_begin_turn(String(state["turn"]))
 			)
 		"pass":
@@ -811,6 +823,83 @@ func _after_move() -> void:
 			_after_move()
 		"turn":
 			await _begin_turn(String(ev["seat"]))
+
+## Фразы исхода раунда. Против бота обращаемся на «ты», между людьми — по именам,
+## и всегда говорим, что именно произошло, а не только счёт.
+func _round_phrases(winner: String, detail: String) -> Dictionary:
+	var vs_bot := MatchState.seat_kind(state, "e") == "bot"
+	if winner == "":
+		return {"title": "НИЧЬЯ В РАУНДЕ", "text": detail + " — никто не теряет ♥"}
+	var loser := MatchState.other_seat(state, winner)
+	var title := ""
+	if vs_bot:
+		title = "РАУНД ТВОЙ!" if winner == "p" else "РАУНД ЗА ВРАГОМ"
+	else:
+		title = MatchState.seat_name(state, winner).to_upper() + " БЕРЁТ РАУНД"
+	var text := detail
+	if String(state["cfg"]["kind"]) == "lives":
+		var who := "ты теряешь" if (vs_bot and loser == "p") else \
+			("враг теряет" if vs_bot else MatchState.seat_name(state, loser) + " теряет")
+		text = "%s — %s ♥" % [detail, who]
+	elif String(state["cfg"]["kind"]) == "bo3":
+		text = "%s · победы %d : %d" % [detail,
+			int(state["players"]["p"]["wins"]), int(state["players"]["e"]["wins"])]
+	return {"title": title, "text": text}
+
+## Фразы конца матча. «Победа / Жизни 3:0» звучало как отчёт судьи, поэтому
+## говорим человеческим языком: кто и почему выиграл.
+func _match_phrases(winner: String) -> Dictionary:
+	var vs_bot := MatchState.seat_kind(state, "e") == "bot"
+	var kind := String(state["cfg"]["kind"])
+	var p_name := MatchState.seat_name(state, "p")
+	var e_name := MatchState.seat_name(state, "e")
+	var title := "НИЧЬЯ"
+	if winner != "":
+		if vs_bot:
+			title = "ПОБЕДА!" if winner == "p" else "ПОРАЖЕНИЕ"
+		else:
+			title = MatchState.seat_name(state, winner).to_upper() + " ПОБЕДИЛ!"
+	var text := ""
+	match kind:
+		"lives":
+			if winner == "":
+				text = "Жизни кончились у обоих одновременно."
+			elif vs_bot:
+				text = "Враг повержен!" if winner == "p" else "Подземелье забрало твои кости."
+			else:
+				text = "%s остался без жизней." % MatchState.other_seat(state, winner).replace("p", p_name).replace("e", e_name)
+		"race":
+			var target := int(state["cfg"]["target"])
+			var sp := int(state["players"]["p"]["score"])
+			var se := int(state["players"]["e"]["score"])
+			if winner == "":
+				text = "Ничья: %d : %d" % [sp, se]
+			else:
+				var who := "Ты добежал" if (vs_bot and winner == "p") else \
+					("Враг добежал" if vs_bot else MatchState.seat_name(state, winner) + " добежал")
+				text = "%s до %d! Итог %d : %d" % [who, target, sp, se]
+		_:
+			var wp := int(state["players"]["p"]["wins"])
+			var we := int(state["players"]["e"]["wins"])
+			if wp != we:
+				var w := maxi(wp, we)
+				var who2 := "Ты взял" if (vs_bot and winner == "p") else \
+					("Враг взял" if vs_bot else MatchState.seat_name(state, winner) + " взял")
+				text = "%s %d %s из 3." % [who2, w, _plural(w, "раунд", "раунда", "раундов")]
+			else:
+				text = "Раунды поделили %d : %d, решили очки за матч: %d : %d" % [wp, we,
+					int(state["players"]["p"]["total"]), int(state["players"]["e"]["total"])]
+	return {"title": title, "text": text}
+
+## Согласование числа: 1 куб, 2 куба, 5 кубов.
+func _plural(n: int, one: String, few: String, many: String) -> String:
+	var m10 := n % 10
+	var m100 := n % 100
+	if m10 == 1 and m100 != 11:
+		return one
+	if m10 >= 2 and m10 <= 4 and (m100 < 10 or m100 >= 20):
+		return few
+	return many
 
 func _animate_place(cell_idx: int) -> void:
 	if cell_idx < 0 or cell_idx >= board_grid.get_child_count():
@@ -834,7 +923,8 @@ func _show_card(record: Dictionary) -> void:
 	var who := MatchState.seat_name(state, seat).to_upper()
 	if seat == "p" and MatchState.seat_kind(state, "e") == "bot":
 		who = "ТВОЙ ХОД"
-	head.add_child(_label("%s · ХОД %d" % [who, int(record["n"])], 10, Palette.GOLD_LIGHT))
+	var htext := "%s %d" % [who, int(record["n"])] if who == "ТВОЙ ХОД" 		else "%s · ХОД %d" % [who, int(record["n"])]
+	head.add_child(_label(htext, 10, Palette.GOLD_LIGHT))
 	head.add_child(_grow())
 	var pts := int(record["pts"])
 	var total := _label("💥 0" if bool(record["mined"]) else str(absi(pts)), 22,
@@ -864,7 +954,8 @@ func _play_card(res: Dictionary) -> void:
 	var who := MatchState.seat_name(state, seat).to_upper()
 	if seat == "p" and MatchState.seat_kind(state, "e") == "bot":
 		who = "ТВОЙ ХОД"
-	head.add_child(_label("%s · ХОД %d" % [who, state["history"].size()], 10, Palette.GOLD_LIGHT))
+	var head_text := "%s %d" % [who, state["history"].size()] if who == "ТВОЙ ХОД" 		else "%s · ХОД %d" % [who, state["history"].size()]
+	head.add_child(_label(head_text, 10, Palette.GOLD_LIGHT))
 	head.add_child(_grow())
 	var total := _label("", 22, Palette.GOLD_LIGHT, Palette.FONT_UI)
 	total.modulate.a = 0.0
@@ -913,14 +1004,16 @@ func toast(text: String, foe: bool = false) -> void:
 func banner(text: String) -> void:
 	banner_label.text = text
 	var panel: Control = get_node("BannerPanel")
+	if _banner_tween != null and _banner_tween.is_valid():
+		_banner_tween.kill()
 	panel.scale = Vector2(0.7, 0.7)
 	panel.pivot_offset = panel.size * 0.5
-	var tw := create_tween()
-	tw.tween_property(panel, "modulate:a", 1.0, 0.12)
-	tw.parallel().tween_property(panel, "scale", Vector2(1.06, 1.06), 0.16).set_ease(Tween.EASE_OUT)
-	tw.tween_property(panel, "scale", Vector2.ONE, 0.1)
-	tw.tween_interval(0.85)
-	tw.tween_property(panel, "modulate:a", 0.0, 0.3)
+	_banner_tween = create_tween()
+	_banner_tween.tween_property(panel, "modulate:a", 1.0, 0.12)
+	_banner_tween.parallel().tween_property(panel, "scale", Vector2(1.06, 1.06), 0.16).set_ease(Tween.EASE_OUT)
+	_banner_tween.tween_property(panel, "scale", Vector2.ONE, 0.1)
+	_banner_tween.tween_interval(0.85)
+	_banner_tween.tween_property(panel, "modulate:a", 0.0, 0.3)
 
 ## Тактильный отклик. На настольных платформах ничего не делает.
 func buzz(pattern_ms: int) -> void:
@@ -1033,6 +1126,19 @@ func _shot_scenario() -> void:
 		"rules":
 			_start_mode("classic")
 			rules_layer.visible = true
+		"round", "win", "hotseat_round":
+			# доигрываем раунд до исхода, чтобы на кадр попали сами фразы
+			second_is_human = (_shot_mode == "hotseat_round")
+			_start_mode("classic")
+			state["players"]["p"]["score"] = 34
+			state["players"]["e"]["score"] = 12
+			if _shot_mode == "win":
+				state["players"]["e"]["lives"] = 1
+			for seat in state["order"]:
+				state["players"][seat]["moves"] = int(state["cfg"]["moves"])
+			veil_layer.visible = false
+			_after_move()
+			await get_tree().process_frame
 		"veil":
 			second_is_human = true
 			_start_mode("classic")
