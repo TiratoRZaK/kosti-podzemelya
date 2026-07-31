@@ -491,7 +491,24 @@ function seatIsHuman(o){return seatKind(o)==='human';}
 function sharedDevice(){return seatIsHuman('p')&&seatLocal('p')&&seatIsHuman('e')&&seatLocal('e');}
 function pname(o){return seatName(o);}
 
-function rnd(n){return Math.floor(Math.random()*n);}
+/* ---------------- случайность с сидом ----------------
+   Вся игровая случайность идёт через этот генератор (xorshift32, чистый ES5 —
+   без Math.imul). Один сид на матч означает: те же колоды, те же типы кубов и
+   тот же шум бота. Это нужно для сетевой игры (у двух клиентов колоды обязаны
+   совпасть), для воспроизводимых тестов и для реплеев.
+   Math.random() остаётся только там, где случайность не игровая. */
+var _seed=1, _matchSeed=1, _tokenSeq=0;
+function newSeed(){return ((Date.now()^(Math.random()*0x7fffffff))|0)||1;}
+function setSeed(s){_seed=(s|0)||1;}
+function rndFloat(){
+  var x=_seed;
+  x^=x<<13; x|=0;
+  x^=x>>>17;
+  x^=x<<5;  x|=0;
+  _seed=x;
+  return (x>>>0)/4294967296;
+}
+function rnd(n){return Math.floor(rndFloat()*n);}
 function pickType(){
   var t=rnd(100), acc=0;
   for(var i=0;i<WEIGHTS.length;i++){acc+=WEIGHTS[i][1]; if(t<acc)return WEIGHTS[i][0];}
@@ -526,8 +543,13 @@ function showMenu(){
   });
   $('menu').classList.add('show');
 }
-function startMode(key){
+/* Сид ставится один раз на матч — здесь. Дальше вся раздача (колоды, типы кубов,
+   добор в гонке, шум бота) идёт от него, поэтому при сетевой игре достаточно
+   передать сид, чтобы у обоих клиентов совпали кубы. */
+function startMode(key,seed){
   var cfg=MODES[key];
+  _matchSeed=(seed==null)?newSeed():(seed|0);
+  setSeed(_matchSeed);
   if(cfg.kind==='durak'){ initDurak(key); return; }
   if(cfg.deck==='draft'){ openDraft(key); return; }
   if(cfg.deck==='shared'){
@@ -578,7 +600,7 @@ function renderDraft(){
 /* ---------------- match flow ---------------- */
 function initMatch(key, pDeckFull, eDeckFull){
   var cfg=MODES[key];
-  S={modeKey:key, cfg:cfg, token:Math.random(), round:0, firstP:true,
+  S={modeKey:key, cfg:cfg, token:++_tokenSeq, seed:_matchSeed, round:0, firstP:true,
      seats:makeSeats(hotseat), veil:null,
      pScore:0, eScore:0, pTotal:0, eTotal:0, history:[], histSel:-1,
      pHand:[], eHand:[], pDeck:pDeckFull||[], eDeck:eDeckFull||[]};
@@ -933,7 +955,7 @@ function botTurn(){
     legalTargets(die,o).forEach(function(ci){
       // шум пропорционален оценке: фиксированные +5 при gain в сотни ИИ не расшатывали
       var raw=evalMove(die,ci,o);
-      var sc=raw+Math.random()*Math.max(4,raw*0.06);
+      var sc=raw+rndFloat()*Math.max(4,raw*0.06);
       if(!best||sc>best.sc)best={hi:hi,ci:ci,sc:sc};
     });
   });
@@ -945,7 +967,7 @@ function botTurn(){
 var SUITS=['♠','♥','♦','♣'];
 function initDurak(key){
   var cfg=MODES[key];
-  S={modeKey:key, cfg:cfg, token:Math.random(),
+  S={modeKey:key, cfg:cfg, token:++_tokenSeq, seed:_matchSeed,
      seats:makeSeats(hotseat), veil:null, shownTo:null,
      talon:makeDurakDeck(), discard:0, trump:0,
      pHand:[], eHand:[], table:[], attacker:'p', maxAtt:6, phase:'idle'};
