@@ -52,9 +52,9 @@ func hand_print(state: Dictionary, seat: String) -> String:
 # ----------------------------------------------------------------- сценарии
 
 func seed_case() -> void:
-	var a := MatchState.new_match("classic", 12345, false)
-	var b := MatchState.new_match("classic", 12345, false)
-	var c := MatchState.new_match("classic", 777, false)
+	var a := MatchState.new_match("classic", 12345, "bot")
+	var b := MatchState.new_match("classic", 12345, "bot")
+	var c := MatchState.new_match("classic", 777, "bot")
 	var same := hand_print(a, "p") == hand_print(b, "p")
 	var diff := hand_print(a, "p") != hand_print(c, "p")
 	check(same and diff, "тот же сид — та же раздача, другой — другая",
@@ -62,14 +62,14 @@ func seed_case() -> void:
 	check(int(a["seed"]) == 12345, "сид матча лежит в состоянии", "S.seed=%d" % int(a["seed"]))
 
 func seats_case() -> void:
-	var pve := MatchState.new_match("classic", 1, false)
+	var pve := MatchState.new_match("classic", 1, "bot")
 	var ok_pve := MatchState.seat_kind(pve, "e") == "bot" and not MatchState.shared_device(pve) \
 		and not MatchState.needs_veil(pve, "p")
 	check(ok_pve, "PVE: за вторым сиденьем бот, ширма не нужна",
 		"p=%s e=%s общее устройство=%s" % [MatchState.seat_kind(pve, "p"),
 			MatchState.seat_kind(pve, "e"), str(MatchState.shared_device(pve))])
 
-	var hs := MatchState.new_match("classic", 1, true)
+	var hs := MatchState.new_match("classic", 1, "human")
 	hs["shown_to"] = "p"
 	var ok_hs := MatchState.shared_device(hs) and MatchState.needs_veil(hs, "e") \
 		and not MatchState.needs_veil(hs, "p")
@@ -82,7 +82,7 @@ func seats_case() -> void:
 
 func pass_case() -> void:
 	# соперник не может ходить: доска забита его же кубами, в руке единицы
-	var s := MatchState.new_match("classic", 4242, true)
+	var s := MatchState.new_match("classic", 4242, "human")
 	s["shown_to"] = "p"
 	for i in s["board"].size():
 		s["board"][i] = {"v": 6, "type": "basic", "owner": "e", "shield": 0}
@@ -99,7 +99,7 @@ func pass_case() -> void:
 ## Полная партия: оба сиденья боты, крутим до конца матча. Проверяем, что игра
 ## доходит до исхода, счёт конечен и на каждом ходу сумма жетонов равна итогу.
 func full_match_case(mode: String) -> void:
-	var s := MatchState.new_match(mode, 31337, false)
+	var s := MatchState.new_match(mode, 31337, "bot")
 	s["seats"]["p"] = {"kind": "bot", "local": false, "name": "Бот 1"}
 	var rng := MatchState.make_rng(999)
 	var guard := 0

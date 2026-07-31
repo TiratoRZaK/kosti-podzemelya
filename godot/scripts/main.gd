@@ -17,7 +17,11 @@ const BG_TEXTURE := "res://assets/bg/dungeon_bg.png"
 
 var state: Dictionary
 var rng := RandomNumberGenerator.new()
-var second_is_human := false     # выбор в меню: посадить человека вместо бота
+var opponent := "bot"            # bot | human (хотсит) | remote (по сети)
+var my_seat := "p"               # своё сиденье: у клиента по сети — второе
+var lan: Lan
+var lobby_layer: Control
+var lobby_box: VBoxContainer
 var selected := -1
 var busy := false
 
@@ -50,6 +54,7 @@ var veil_title: Label
 var over_layer: Control
 
 var _banner_tween: Tween
+var banner_panel: PanelContainer
 var _shot_path := ""
 var _shot_mode := ""
 
@@ -79,6 +84,8 @@ func _parse_args() -> void:
 			_shot_mode = "win"
 		elif a == "--shot-hotseat-round":
 			_shot_mode = "hotseat_round"
+		elif a == "--shot-lobby":
+			_shot_mode = "lobby"
 
 # ------------------------------------------------------------------ вид
 
@@ -91,7 +98,7 @@ func viewer() -> String:
 	if MatchState.shared_device(state):
 		var shown := String(state["shown_to"])
 		return shown if shown != "" else String(state["turn"])
-	return "p"
+	return my_seat
 
 func input_allowed() -> bool:
 	if state.is_empty() or busy or veil_layer.visible or menu_layer.visible:
@@ -185,6 +192,8 @@ func _build_ui() -> void:
 	add_child(over_layer)
 	rules_layer = _build_rules()
 	add_child(rules_layer)
+	lobby_layer = _build_lobby()
+	add_child(lobby_layer)
 	# баннер поверх всего: «РАУНД 2», «500!». Подложка обязательна — без неё
 	# цифры кубов читаются сквозь текст
 	banner_label = _label("", 20, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
@@ -200,14 +209,19 @@ func _build_ui() -> void:
 	bsb.content_margin_top = 10
 	bsb.content_margin_bottom = 10
 	bpanel.add_theme_stylebox_override("panel", bsb)
-	bpanel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	bpanel.z_index = 119
 	bpanel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	bpanel.name = "BannerPanel"
+	banner_panel = bpanel
 	# размером label управляет PanelContainer: свои anchors ломали расчёт и панель
 	# показывалась пустой рамкой
 	bpanel.add_child(banner_label)
-	add_child(bpanel)
+	# центрируем контейнером, а не пресетом: на момент вызова пресета размер
+	# панели ещё нулевой, и её уносило от центра экрана
+	var bcenter := CenterContainer.new()
+	bcenter.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bcenter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bcenter.z_index = 119
+	bcenter.add_child(bpanel)
+	add_child(bcenter)
 	bpanel.modulate.a = 0.0
 
 func _title_block() -> Control:
@@ -320,11 +334,14 @@ func _build_menu() -> Control:
 	toggle.text = "2 игрока на одном телефоне"
 	toggle.add_theme_font_size_override("font_size", 13)
 	toggle.add_theme_color_override("font_color", Palette.TEXT)
-	toggle.toggled.connect(func(on: bool): second_is_human = on)
+	toggle.toggled.connect(func(on: bool): opponent = "human" if on else "bot")
 	v.add_child(toggle)
 
 	for key in MatchState.MODE_ORDER:
 		v.add_child(_mode_button(key, MatchState.MODES[key]))
+	var lan_btn := _button("Играть по Wi-Fi")
+	lan_btn.pressed.connect(_show_lobby)
+	v.add_child(lan_btn)
 	var quit_btn := _button("Выход", true)
 	quit_btn.pressed.connect(func(): get_tree().quit())
 	v.add_child(quit_btn)
@@ -398,6 +415,174 @@ const ABILITY_TEXT := {
 	"friendly": "Прибавляет к себе сумму значений соседей, максимум 12.",
 	"warlock": "Ест куб любого значения и копирует его. Щит не пробивает.",
 }
+
+## Лобби локальной игры. Хост поднимает партию, второй ищет его широковещательным
+## запросом — адрес вводить не нужно, оба телефона просто в одной сети Wi-Fi.
+func _build_lobby() -> Control:
+	var layer := _full_dim(0.96)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := _panel(Palette.PANEL_2)
+	center.add_child(panel)
+	lobby_box = VBoxContainer.new()
+	lobby_box.add_theme_constant_override("separation", 10)
+	lobby_box.custom_minimum_size.x = 300
+	panel.add_child(lobby_box)
+	return layer
+
+func _show_lobby() -> void:
+	menu_layer.visible = false
+	lobby_layer.visible = true
+	_lobby_idle()
+
+func _lobby_idle() -> void:
+	for c in lobby_box.get_children():
+		c.queue_free()
+	var t := _label("ИГРА ПО WI-FI", 20, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(t)
+	var hint_l := _label("Оба устройства должны быть в одной сети Wi-Fi. Интернет не нужен.", 11, Palette.MUTED)
+	hint_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint_l.custom_minimum_size.x = 290
+	hint_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(hint_l)
+
+	var host_btn := _button("Создать игру")
+	host_btn.pressed.connect(_lan_host)
+	lobby_box.add_child(host_btn)
+	var find_btn := _button("Найти игру")
+	find_btn.pressed.connect(_lan_find)
+	lobby_box.add_child(find_btn)
+	var back := _button("Назад", true)
+	back.pressed.connect(func():
+		if lan != null:
+			lan.stop()
+		lobby_layer.visible = false
+		_show_menu()
+	)
+	lobby_box.add_child(back)
+
+func _lobby_message(text: String, with_back: bool = true) -> void:
+	for c in lobby_box.get_children():
+		c.queue_free()
+	var t := _label("ИГРА ПО WI-FI", 20, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(t)
+	var m := _label(text, 12, Palette.TEXT)
+	m.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	m.custom_minimum_size.x = 290
+	m.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(m)
+	if with_back:
+		var back := _button("Назад", true)
+		back.pressed.connect(func():
+			if lan != null:
+				lan.stop()
+			_lobby_idle()
+		)
+		lobby_box.add_child(back)
+
+func _lan_host() -> void:
+	_ensure_lan()
+	if not lan.start_host("Хост"):
+		_lobby_message("Не удалось открыть игру: порт занят. Закрой другую копию игры и попробуй снова.")
+		return
+	my_seat = "p"
+	opponent = "remote"
+	_lobby_message("Ждём соперника…\nПусть он нажмёт «Найти игру».")
+
+func _lan_find() -> void:
+	_ensure_lan()
+	_lobby_message("Ищем игру в сети…", false)
+	lan.discover()
+
+func _ensure_lan() -> void:
+	if lan != null:
+		return
+	lan = Lan.new()
+	add_child(lan)
+	lan.peer_connected.connect(_on_lan_connected)
+	lan.peer_lost.connect(_on_lan_lost)
+	lan.hosts_found.connect(_on_lan_hosts)
+	lan.match_started.connect(_on_lan_match_started)
+	lan.move_received.connect(_on_lan_move)
+	lan.next_round_received.connect(_on_lan_next_round)
+
+func _on_lan_hosts(list: Array) -> void:
+	if list.is_empty():
+		_lobby_message("Игру не нашли. Проверь, что оба устройства в одной сети Wi-Fi и соперник нажал «Создать игру».")
+		return
+	for c in lobby_box.get_children():
+		c.queue_free()
+	var t := _label("НАЙДЕННЫЕ ИГРЫ", 18, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(t)
+	for h in list:
+		var b := _button("%s · %s" % [String(h["name"]), String(h["address"])])
+		b.pressed.connect(func():
+			my_seat = "e"       # у клиента своё сиденье второе
+			opponent = "remote"
+			if not lan.join(String(h["address"])):
+				_lobby_message("Не удалось подключиться. Попробуй ещё раз.")
+			else:
+				_lobby_message("Подключаемся…", false)
+		)
+		lobby_box.add_child(b)
+	var back := _button("Назад", true)
+	back.pressed.connect(_lobby_idle)
+	lobby_box.add_child(back)
+
+func _on_lan_connected() -> void:
+	if lan.is_host:
+		# хост выбирает режим; клиент ждёт объявления партии
+		lobby_layer.visible = false
+		menu_layer.visible = true
+		toast("Соперник подключился — выбери режим")
+	else:
+		_lobby_message("Подключились! Ждём, пока хост выберет режим…", false)
+
+func _on_lan_lost() -> void:
+	if state.is_empty():
+		_lobby_message("Соперник отключился.")
+	else:
+		busy = true
+		_show_result("СВЯЗЬ ПОТЕРЯНА", "Соперник отключился.", "В меню", _show_menu)
+
+func _on_lan_match_started(mode: String, seed_value: int) -> void:
+	# клиент собирает ту же партию из присланного сида
+	lobby_layer.visible = false
+	menu_layer.visible = false
+	opponent = "remote"
+	state = MatchState.new_match(mode, seed_value, "remote", my_seat)
+	board_grid.columns = int(state["cfg"]["cols"])
+	hist_sel = -1
+	mode_tag.text = String(state["cfg"]["title"]).to_upper()
+	for c in card_box.get_children():
+		c.queue_free()
+	toast("")
+	_refresh()
+	banner("РАУНД %d" % int(state["round"]))
+	_begin_turn(String(state["turn"]))
+
+func _on_lan_move(seat: String, hand_idx: int, cell_idx: int) -> void:
+	# ход соперника прилетел данными и применяется той же логикой
+	if state.is_empty():
+		return
+	await _do_move(seat, hand_idx, cell_idx, false)
+
+func _on_lan_next_round() -> void:
+	if state.is_empty():
+		return
+	over_layer.visible = false
+	MatchState.new_round(state)
+	hist_sel = -1
+	for c in card_box.get_children():
+		c.queue_free()
+	toast("")
+	_refresh()
+	banner("РАУНД %d" % int(state["round"]))
+	_begin_turn(String(state["turn"]))
 
 func _build_rules() -> Control:
 	var layer := _full_dim(0.96)
@@ -490,7 +675,10 @@ func _start_mode(key: String) -> void:
 	menu_layer.visible = false
 	over_layer.visible = false
 	selected = -1
-	state = MatchState.new_match(key, int(Time.get_unix_time_from_system()) & 0x7fffffff, second_is_human)
+	var seed_value := int(Time.get_unix_time_from_system()) & 0x7fffffff
+	if opponent == "remote" and lan != null and lan.is_host:
+		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
+	state = MatchState.new_match(key, seed_value, opponent, my_seat)
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -505,6 +693,10 @@ func _start_mode(key: String) -> void:
 ## позже добавляется сюда же — ещё одной ветвью по типу сиденья.
 func _begin_turn(seat: String) -> void:
 	selected = -1
+	if MatchState.seat_kind(state, seat) == "remote":
+		busy = true
+		_refresh()
+		return
 	if MatchState.seat_kind(state, seat) == "bot":
 		busy = true
 		_refresh()
@@ -542,7 +734,7 @@ func _hide_banner() -> void:
 	# Гасить одну альфу недостаточно — твин её тут же поднимает обратно.
 	if _banner_tween != null and _banner_tween.is_valid():
 		_banner_tween.kill()
-	var panel := get_node_or_null("BannerPanel")
+	var panel := banner_panel
 	if panel != null:
 		panel.modulate.a = 0.0
 
@@ -562,12 +754,20 @@ func _show_result(title: String, detail: String, button: String, on_press: Calla
 	var d := _label(detail, 13, Palette.TEXT)
 	d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(d)
-	var b := _button(button)
-	b.pressed.connect(func():
-		over_layer.visible = false
-		on_press.call()
-	)
-	box.add_child(b)
+	# В сетевой игре раунд двигает только хост: если кнопку нажмут оба, раунд
+	# продвинется дважды и состояния разъедутся.
+	var client_waits: bool = opponent == "remote" and lan != null and not lan.is_host and button != "В меню"
+	if client_waits:
+		var w := _label("Ждём хоста…", 12, Palette.MUTED)
+		w.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		box.add_child(w)
+	else:
+		var b := _button(button)
+		b.pressed.connect(func():
+			over_layer.visible = false
+			on_press.call()
+		)
+		box.add_child(b)
 	var m := _button("В меню", true)
 	m.pressed.connect(_show_menu)
 	box.add_child(m)
@@ -731,7 +931,8 @@ func _rebuild_hand(me: String) -> void:
 func _update_sel_info(me: String) -> void:
 	if not input_allowed():
 		var turn := String(state["turn"])
-		sel_info.text = "Соперник думает…" if MatchState.seat_kind(state, turn) == "bot" else "Секунду…"
+		var k := MatchState.seat_kind(state, turn)
+		sel_info.text = "Соперник думает…" if k == "bot" else ("Ход соперника…" if k == "remote" else "Секунду…")
 		return
 	if selected >= 0:
 		var hand: Array = state["players"][me]["hand"]
@@ -775,9 +976,12 @@ func _on_cell_input(event: InputEvent, idx: int) -> void:
 
 # -------------------------------------------------------------------- ход
 
-func _do_move(seat: String, hand_idx: int, cell_idx: int) -> void:
+func _do_move(seat: String, hand_idx: int, cell_idx: int, broadcast: bool = true) -> void:
 	busy = true
 	selected = -1
+	# по сети уходит сам ход, а не состояние: три числа вместо всей доски
+	if broadcast and opponent == "remote" and lan != null and lan.connected:
+		lan.send_move(seat, hand_idx, cell_idx)
 	var res := MatchState.play(state, seat, hand_idx, cell_idx)
 	_refresh()
 	_animate_place(int(res["placed"]))
@@ -806,6 +1010,8 @@ func _after_move() -> void:
 			busy = true
 			var rp := _round_phrases(String(out["winner"]), String(out["detail"]))
 			_show_result(String(rp["title"]), String(rp["text"]), "Следующий раунд", func():
+				if opponent == "remote" and lan != null and lan.connected:
+					lan.send_next_round()
 				MatchState.new_round(state)
 				hist_sel = -1
 				for c in card_box.get_children():
@@ -1003,7 +1209,7 @@ func toast(text: String, foe: bool = false) -> void:
 ## Баннер по центру: «РАУНД 2», «500!». Живёт полторы секунды и гаснет.
 func banner(text: String) -> void:
 	banner_label.text = text
-	var panel: Control = get_node("BannerPanel")
+	var panel: Control = banner_panel
 	if _banner_tween != null and _banner_tween.is_valid():
 		_banner_tween.kill()
 	panel.scale = Vector2(0.7, 0.7)
@@ -1126,9 +1332,11 @@ func _shot_scenario() -> void:
 		"rules":
 			_start_mode("classic")
 			rules_layer.visible = true
+		"lobby":
+			_show_lobby()
 		"round", "win", "hotseat_round":
 			# доигрываем раунд до исхода, чтобы на кадр попали сами фразы
-			second_is_human = (_shot_mode == "hotseat_round")
+			opponent = "human" if _shot_mode == "hotseat_round" else "bot"
 			_start_mode("classic")
 			state["players"]["p"]["score"] = 34
 			state["players"]["e"]["score"] = 12
@@ -1140,7 +1348,7 @@ func _shot_scenario() -> void:
 			_after_move()
 			await get_tree().process_frame
 		"veil":
-			second_is_human = true
+			opponent = "human"
 			_start_mode("classic")
 			await get_tree().process_frame
 		"move":

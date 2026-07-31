@@ -44,11 +44,22 @@ const MODE_ORDER := ["classic", "big", "draft", "race", "territory"]
 ## За сиденьем сидит человек, бот или (в будущем) игрок по сети. `local` — играет
 ## на этом устройстве. Через это выражается всё: ждать ввода или звать бота, как
 ## называть игрока, нужна ли ширма.
-static func make_seats(second_is_human: bool) -> Dictionary:
+## opponent: "bot" — игра против бота, "human" — хотсит на одном устройстве,
+## "remote" — соперник по сети. my_seat важен только для сети: у клиента своё
+## сиденье второе, и именно оно local.
+static func make_seats(opponent: String, my_seat: String = "p", foe_name: String = "Соперник") -> Dictionary:
+	if opponent == "human":
+		return {
+			"p": {"kind": "human", "local": true, "name": "Игрок 1"},
+			"e": {"kind": "human", "local": true, "name": "Игрок 2"},
+		}
+	if opponent == "remote":
+		var mine := {"kind": "human", "local": true, "name": "Ты"}
+		var theirs := {"kind": "remote", "local": false, "name": foe_name}
+		return {"p": mine, "e": theirs} if my_seat == "p" else {"p": theirs, "e": mine}
 	return {
-		"p": {"kind": "human", "local": true, "name": "Игрок 1" if second_is_human else "Ты"},
-		"e": ({"kind": "human", "local": true, "name": "Игрок 2"} if second_is_human
-			else {"kind": "bot", "local": false, "name": "Враг"}),
+		"p": {"kind": "human", "local": true, "name": "Ты"},
+		"e": {"kind": "bot", "local": false, "name": "Враг"},
 	}
 
 static func seat_kind(state: Dictionary, seat: String) -> String:
@@ -113,7 +124,8 @@ static func shuffled(rng: RandomNumberGenerator, arr: Array) -> Array:
 
 # --------------------------------------------------------------- создание
 
-static func new_match(mode_key: String, seed_value: int, second_is_human: bool) -> Dictionary:
+static func new_match(mode_key: String, seed_value: int, opponent: String,
+		my_seat: String = "p", foe_name: String = "Соперник") -> Dictionary:
 	var cfg: Dictionary = MODES[mode_key]
 	var order := ["p", "e"]
 	var players := {}
@@ -126,7 +138,7 @@ static func new_match(mode_key: String, seed_value: int, second_is_human: bool) 
 		"mode": mode_key, "cfg": cfg, "seed": seed_value,
 		"cols": int(cfg["cols"]), "board": [],
 		"order": order, "players": players,
-		"seats": make_seats(second_is_human),
+		"seats": make_seats(opponent, my_seat, foe_name),
 		"turn": "p", "first_seat": "p",
 		"round": 0, "history": [], "shown_to": "", "veil": "",
 		"over": false, "outcome": {},
