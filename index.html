@@ -597,15 +597,50 @@ function renderDraft(){
   });
 }
 
+/* ---------------- состав игроков ----------------
+   Данные игрока лежат в S.pl[seatId], порядок хода — в S.order. Раньше это были
+   пары полей pScore/eScore, pHand/eHand и так далее, из-за чего третьего игрока
+   добавить было некуда. Владелец куба на доске — тот же строковый id сиденья,
+   поэтому legalTargets/boardSum/comboBonus уже работают с любым числом игроков.
+
+   Старые имена (S.pScore, S.eHand, …) оставлены как свойства-переходники на
+   S.pl — иначе пришлось бы переписать разом сотню обращений по всему файлу.
+   Новый код пишется через pl(o). */
+var PL_FIELDS=['Score','Total','Hand','Deck','Moves','Lives','Wins'];
+function pl(o){return S.pl[o];}
+function bindPlayerAliases(){
+  ['p','e'].forEach(function(o){
+    PL_FIELDS.forEach(function(f){
+      var key=f.charAt(0).toLowerCase()+f.slice(1);
+      try{
+        Object.defineProperty(S,o+f,{
+          configurable:true,
+          get:function(){return S.pl[o][key];},
+          set:function(v){S.pl[o][key]=v;}
+        });
+      }catch(e){}
+    });
+  });
+}
+function makePlayers(order,pDeckFull,eDeckFull){
+  var pls={};
+  order.forEach(function(o){
+    pls[o]={score:0,total:0,hand:[],deck:[],moves:0,lives:LIVESMAX,wins:0};
+  });
+  if(pls.p)pls.p.deck=pDeckFull||[];
+  if(pls.e)pls.e.deck=eDeckFull||[];
+  return pls;
+}
+
 /* ---------------- match flow ---------------- */
 function initMatch(key, pDeckFull, eDeckFull){
   var cfg=MODES[key];
+  var order=['p','e'];
   S={modeKey:key, cfg:cfg, token:++_tokenSeq, seed:_matchSeed, round:0, firstP:true,
      seats:makeSeats(hotseat), veil:null,
-     pScore:0, eScore:0, pTotal:0, eTotal:0, history:[], histSel:-1,
-     pHand:[], eHand:[], pDeck:pDeckFull||[], eDeck:eDeckFull||[]};
-  if(cfg.kind==='lives'){S.pLives=LIVESMAX; S.eLives=LIVESMAX;}
-  if(cfg.kind==='bo3'){S.pWins=0; S.eWins=0;}
+     order:order, pl:makePlayers(order,pDeckFull,eDeckFull),
+     history:[], histSel:-1};
+  bindPlayerAliases();   // жизни и победы уже обнулены в makePlayers
   $('whoTop').textContent=seatName('e');
   $('whoBottom').textContent=seatName('p');
   $('modeTag').textContent=cfg.title.toLowerCase();
@@ -619,8 +654,8 @@ function newRound(){
   S.round++;
   S.board=[];
   for(var bi=0;bi<S.cfg.cells;bi++)S.board.push(null);
-  S.pMoves=0; S.eMoves=0;
-  if(S.cfg.kind!=='race'){S.pScore=0; S.eScore=0;}
+  S.order.forEach(function(o){pl(o).moves=0;});
+  if(S.cfg.kind!=='race')S.order.forEach(function(o){pl(o).score=0;});
   if(S.cfg.deck==='perRound'){
     S.pDeck=makeDeck(S.cfg.deckSize); S.eDeck=makeDeck(S.cfg.deckSize);
     S.pHand=[]; S.eHand=[];
@@ -662,8 +697,22 @@ function beginTurn(o,delay){
 // ширма нужна, когда экран сейчас «принадлежит» другому человеку за тем же устройством
 function needVeil(o){return sharedDevice()&&seatIsHuman(o)&&S.shownTo!==o;}
 
-function moves(o){return o==='p'?S.pMoves:S.eMoves;}
-function incMoves(o){if(o==='p')S.pMoves++;else S.eMoves++;}
+function moves(o){return pl(o).moves;}
+function incMoves(o){pl(o).moves++;}
+// все ли отыграли лимит ходов — считается по составу, а не по двум полям
+function allMovesSpent(){
+  var M=S.cfg.moves;
+  return S.order.every(function(o){return moves(o)>=M;});
+}
+// следующее сиденье по кругу, у которого остались ходы; иначе ходит тот же
+function nextSeat(from){
+  var n=S.order.length, i=S.order.indexOf(from);
+  for(var k=1;k<=n;k++){
+    var cand=S.order[(i+k)%n];
+    if(moves(cand)<S.cfg.moves)return cand;
+  }
+  return from;
+}
 
 function neighbors(i){
   var C=S.cfg.cols, N=S.cfg.cells;
@@ -710,7 +759,18 @@ function comboBonus(vals){
   return{b:0,n:null,vals:[]};
 }
 
+/* ---------------- ход: логика и отображение разделены ----------------
+   applyMove() меняет только состояние и возвращает, что произошло. Она не трогает
+   DOM и не заводит таймеров, поэтому её может вызвать бот, сервер или тест — и она
+   же переносится в Godot без изменений.
+   presentMove() рисует результат: анимация, лента истории, пауза до следующего хода.
+   doMove() = applyMove + presentMove, чтобы вызовы из UI и харнесса не менялись. */
 function doMove(owner,handIdx,cellIdx){
+  var res=applyMove(owner,handIdx,cellIdx);
+  if(res)presentMove(res);
+  return res;
+}
+function applyMove(owner,handIdx,cellIdx){
   var hand=owner==='p'?S.pHand:S.eHand;
   var deck=owner==='p'?S.pDeck:S.eDeck;
   var die=hand.splice(handIdx,1)[0];
@@ -797,25 +857,29 @@ function doMove(owner,handIdx,cellIdx){
   else S.eScore+=delta;
 
   incMoves(owner);
-  sel=null;
-  render();
   S.history.push({n:S.history.length+1, who:owner, pts:delta, parts:parts, mined:mined});
   S.histSel=-1;
-  renderHistory();
+  // здесь логика хода заканчивается: дальше только показ
+  return {owner:owner, cell:cellIdx, parts:parts, pts:delta, mined:mined, combo:cbHit};
+}
 
-  // Очки прилетают в ленту истории: число вылетает из клетки, влетает в карточку
-  // хода и превращается там в жетон. Когда все жетоны на месте — они складываются
-  // в итог хода справа. Считать на лету в центре доски было плохо читаемо.
-  if(mined){
-    floatScore(cellIdx,'💥','combo');
+/* Показ хода. Очки прилетают в ленту истории: число вылетает из клетки, влетает в
+   карточку хода и превращается там в жетон; когда все жетоны на месте — они
+   складываются в итог справа. Считать на лету в центре доски было плохо читаемо. */
+function presentMove(res){
+  sel=null;
+  render();
+  renderHistory();
+  if(res.mined){
+    floatScore(res.cell,'💥','combo');
     buzz([40,60,140]);
   }
-  if(cbHit&&cbHit.b>=25){
+  if(res.combo&&res.combo.b>=25){
     var bd=$('board'); bd.classList.add('comboflash');
     setTimeout(function(){bd.classList.remove('comboflash');},750);
     buzz([18,40,18]);
   }
-  var seqDur=playChipSequence(owner,parts,cellIdx);
+  var seqDur=playChipSequence(res.owner,res.parts,res.cell);
 
   // мгновенная победа в гонке
   if(S.cfg.kind==='race'&&(S.pScore>=S.cfg.target||S.eScore>=S.cfg.target)){
@@ -828,10 +892,8 @@ function doMove(owner,handIdx,cellIdx){
 }
 
 function advance(){
-  var M=S.cfg.moves;
-  if(S.pMoves>=M&&S.eMoves>=M){endRound();return;}
-  var next=S.turn==='p'?'e':'p';
-  if(moves(next)>=M)next=S.turn;
+  if(allMovesSpent()){endRound();return;}
+  var next=nextSeat(S.turn);
   S.turn=next;
   if(!hasLegal(next)){
     toast(seatName(next)+': нет ходов — пас', next==='e');
@@ -967,10 +1029,13 @@ function botTurn(){
 var SUITS=['♠','♥','♦','♣'];
 function initDurak(key){
   var cfg=MODES[key];
+  var order=['p','e'];
   S={modeKey:key, cfg:cfg, token:++_tokenSeq, seed:_matchSeed,
      seats:makeSeats(hotseat), veil:null, shownTo:null,
+     order:order, pl:makePlayers(order,[],[]),
      talon:makeDurakDeck(), discard:0, trump:0,
-     pHand:[], eHand:[], table:[], attacker:'p', maxAtt:6, phase:'idle'};
+     table:[], attacker:'p', maxAtt:6, phase:'idle'};
+  bindPlayerAliases();
   $('whoTop').textContent=seatName('e');
   $('whoBottom').textContent=seatName('p');
   S.trump=S.talon[0].suit; // нижний куб колоды — козырь
