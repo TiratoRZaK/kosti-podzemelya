@@ -164,10 +164,12 @@ func _get_param(param: String) -> float:
 func _draw_pips() -> void:
 	if shield_charges <= 0 and type_id != "shield":
 		return
-	var seg := Vector2(size.x * 0.2, maxf(3.0, size.y * 0.055))
-	var gap := seg.x * 0.4
+	var seg := Vector2(size.x * 0.18, maxf(3.0, size.y * 0.06))
+	var gap := seg.x * 0.45
 	var total := seg.x * Rules.SHIELD_CHARGES + gap * (Rules.SHIELD_CHARGES - 1)
-	var start := Vector2((size.x - total) * 0.5, seg.y * 0.55)
+	# отступ от края: обводка щита идёт по самому контуру, и сегменты на неё
+	# наезжали, превращаясь в одну неразборчивую полосу
+	var start := Vector2((size.x - total) * 0.5, maxf(5.0, size.y * 0.1))
 	for i in Rules.SHIELD_CHARGES:
 		var col := Palette.CYAN
 		if i >= shield_charges:

@@ -134,6 +134,8 @@ func _parse_args() -> void:
 			_shot_mode = "durak_take"
 		elif a == "--shot-durak-lose":
 			_shot_mode = "durak_lose"
+		elif a == "--shot-shield":
+			_shot_mode = "shield"
 
 # ------------------------------------------------------------------ вид
 
@@ -2239,6 +2241,19 @@ func _shot_scenario() -> void:
 			var res_big := MatchState.play(state, "p", 0, 0)
 			_refresh()
 			await _play_card(res_big)
+		"shield":
+			# щиты крупно и мелко: обводка обязана идти по краю всего куба, включая
+			# нижнюю фаску, иначе она читается как «рамка не по размеру»
+			opponent = "bot"
+			_start_mode("classic")
+			state["board"][0] = {"v": 6, "type": "shield", "owner": "e", "shield": 2}
+			state["board"][1] = {"v": 4, "type": "shield", "owner": "p", "shield": 1}
+			state["board"][4] = {"v": 3, "type": "basic", "owner": "p", "shield": 0}
+			state["players"]["p"]["hand"][0] = {"value": 5, "type": "shield"}
+			state["shown_to"] = "p"
+			busy = false
+			_refresh()
+			await get_tree().process_frame
 		"net_client":
 			# глазами не-хоста: его кубы второго сиденья должны быть красными и в
 			# руке, и на доске
