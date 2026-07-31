@@ -1,0 +1,25 @@
+; Кости Подземелья — версия для Android.
+; Веб-прототип в корне репозитория остаётся эталоном правил: любое расхождение
+; в подсчёте очков считается ошибкой переноса, а не «другой версией».
+
+config_version=5
+
+[application]
+
+config/name="Кости Подземелья"
+config/description="Пошаговая дуэль кубами. Порт веб-прототипа."
+; главной сцены пока нет — переносится логика; появится вместе с UI-слоем
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[display]
+
+window/size/viewport_width=390
+window/size/viewport_height=844
+window/handheld/orientation=1
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
