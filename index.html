@@ -1220,7 +1220,8 @@ function botDurak(){
 function renderDurak(){
   // низ экрана — рука того, кто действует (в хотсите она переезжает между людьми),
   // верх — рубашки соперника
-  var me=(sharedDevice()&&durakActor())?durakActor():'p';
+  // как и в боевых режимах: вид у того, кому открыт экран, а не у того, чья роль
+  var me=sharedDevice()?(S.shownTo||durakActor()||'p'):'p';
   var foe=other(me);
   var myHand=handOf(me), foeHand=handOf(foe);
   var acting=durakActor();
@@ -1494,10 +1495,10 @@ function render(){
   $('actionbar').innerHTML='';
   var k=S.cfg.kind;
   /* Вся нижняя зона принадлежит тому, чьими глазами смотрим, верхняя — сопернику.
-     В хотсите зона переезжает вместе с рукой: раньше рука следовала за актором,
-     а подпись, счёт и жизни оставались за 'p', и при ходе Игрока 2 внизу была его
-     красная рука с именем и счётом Игрока 1. */
-  var me=sharedDevice()?S.turn:'p';
+     Вид привязан к тому, кому ОТКРЫТ экран (S.shownTo), а не к тому, чей ход:
+     иначе при пасе соперника (ходов нет — ход сгорает без ширмы) экран молча
+     переключался на него и показывал сидящему чужую руку. */
+  var me=sharedDevice()?(S.shownTo||S.turn):'p';
   var foe=other(me);
   $('whoBottom').textContent=seatName(me);
   $('whoTop').textContent=seatName(foe);
@@ -1538,7 +1539,9 @@ function render(){
 
   // чьими глазами смотрим на доску — тот же, кому принадлежит нижняя зона
   var actor=me;
-  var canAct=!busy&&!S.veil&&seatIsHuman(S.turn)&&seatLocal(S.turn);
+  // действовать может только тот, чей ход И кому открыт экран
+  var canAct=!busy&&!S.veil&&seatIsHuman(S.turn)&&seatLocal(S.turn)
+    &&(!sharedDevice()||S.shownTo===S.turn);
   var aHand=pl(actor).hand;
   var valid=(sel!==null&&canAct&&aHand[sel])?legalTargets(aHand[sel],actor):[];
   var hint=canAct?findHint(actor):null;
