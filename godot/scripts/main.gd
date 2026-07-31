@@ -243,6 +243,8 @@ func _parse_args() -> void:
 			_shot_mode = "fx"
 		elif a == "--shot-shake":
 			_shot_mode = "shake"
+		elif a == "--shot-combo":
+			_shot_mode = "combo"
 		elif a == "--shot-name":
 			_shot_mode = "name_ask"
 		elif a == "--shot-modes":
@@ -2156,11 +2158,13 @@ func _do_move(seat: String, hand_idx: int, cell_idx: int, broadcast: bool = true
 	else:
 		_play_effects(res)     # шипы, колдун, челюсть, дружелюбный
 	var combo: Dictionary = res["combo"]
-	if not combo.is_empty() and int(combo["bonus"]) >= 25:
-		_combo_flash()
-		_shake(4.0, 0.2)
-		_float_text(int(res["cell"]), String(combo["name"]).replace("!", "") + "!",
-			Palette.GOLD_LIGHT, 24)
+	if not combo.is_empty() and int(combo["bonus"]) > 0:
+		# выкрик по центру поля для любой комбинации, от пары до шестёрки: она
+		# начисляется каждый ход, и игрок должен видеть, за что
+		_combo_call(String(combo["name"]), int(combo["bonus"]))
+		if int(combo["bonus"]) >= 25:
+			_combo_flash()
+			_shake(4.0, 0.2)
 	await _play_card(res)
 	_after_move()
 
@@ -2679,6 +2683,62 @@ func _play_effects(res: Dictionary) -> void:
 				_ring(cell, Palette.GOLD, 1.8, 0.4)
 				_float_text(cell, "🤝 +%d" % int(p["v"]), Palette.GOLD_LIGHT, 24)
 
+## Выкрик комбинации по центру поля: «ПАРА +5», «КАРЕ +40». Чем крупнее комбо,
+## тем крупнее буквы — пара не должна выглядеть как шестёрка.
+func _combo_call(name_of_combo: String, bonus: int) -> void:
+	if name_of_combo == "":
+		return
+	# баннер раунда живёт по центру экрана и мог столкнуться с выкриком в первом
+	# же ходу; раунд к этому моменту всё равно начался
+	_hide_banner()
+	await get_tree().process_frame
+	var size_px := 22
+	if bonus >= 100:
+		size_px = 40
+	elif bonus >= 60:
+		size_px = 36
+	elif bonus >= 40:
+		size_px = 32
+	elif bonus >= 25:
+		size_px = 28
+	elif bonus >= 10:
+		size_px = 25
+	var text := "%s +%d" % [name_of_combo.replace("!", ""), bonus]
+	var box := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.02, 0.07, 0.86)
+	sb.set_corner_radius_all(12)
+	sb.border_color = Color(Palette.GOLD.r, Palette.GOLD.g, Palette.GOLD.b, 0.75)
+	sb.set_border_width_all(2)
+	sb.content_margin_left = 16
+	sb.content_margin_right = 16
+	sb.content_margin_top = 6
+	sb.content_margin_bottom = 6
+	box.add_theme_stylebox_override("panel", sb)
+	box.z_index = 126
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var l := _label(text, size_px, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(l)
+	add_child(box)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# по центру самого поля, а не экрана: комбинация про кубы на доске
+	var board_mid: Vector2 = board_grid.global_position + board_grid.size * 0.5
+	box.global_position = board_mid - box.size * 0.5
+	box.pivot_offset = box.size * 0.5
+	box.scale = Vector2(0.5, 0.5)
+	box.modulate.a = 0.0
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(box, "scale", Vector2(1.12, 1.12), 0.18).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_BACK)
+	tw.tween_property(box, "modulate:a", 1.0, 0.14)
+	tw.chain().tween_property(box, "scale", Vector2.ONE, 0.1)
+	tw.chain().tween_interval(0.5)
+	tw.chain().tween_property(box, "global_position:y", box.global_position.y - 34.0, 0.4)
+	tw.parallel().tween_property(box, "modulate:a", 0.0, 0.4)
+	tw.chain().tween_callback(box.queue_free)
+
 ## Вспышка всей доски: комбо от фулл-хауса и выше.
 func _combo_flash() -> void:
 	buzz(60)
@@ -2831,6 +2891,18 @@ func _shot_scenario() -> void:
 			# второй шаг меню: выбор режима после выбора вида игры
 			_show_modes()
 			await get_tree().process_frame
+		"combo":
+			opponent = "bot"
+			_start_mode("classic")
+			state["board"][3] = {"v": 4, "type": "basic", "owner": "p", "shield": 0}
+			state["board"][4] = {"v": 4, "type": "basic", "owner": "p", "shield": 0}
+			state["players"]["p"]["hand"][0] = {"value": 4, "type": "basic"}
+			state["shown_to"] = "p"
+			_refresh()
+			var res_cmb := MatchState.play(state, "p", 0, 1)
+			_refresh()
+			_combo_call(String(res_cmb["combo"]["name"]), int(res_cmb["combo"]["bonus"]))
+			await get_tree().create_timer(0.45).timeout
 		"shake":
 			# три толчка подряд, как при взрыве вместе с итогом хода: экран обязан
 			# вернуться ровно на место, иначе им нельзя управлять
