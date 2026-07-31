@@ -1080,13 +1080,48 @@ function durakActor(){
   if(S.phase==='defend')return other(S.attacker);
   return null;
 }
-// передача управления: бот думает, человек за общим устройством видит ширму
+/* Единственное доступное действие: защитнику нечем отбить (остаётся «Взять») или
+   атакующему нечем подкинуть (остаётся «Бито»). Выбора у игрока нет, скрывать
+   тоже нечего — стол открыт обоим. Возвращает 'take' | 'bito' | null. */
+function forcedDurakAction(o){
+  if(S.phase==='defend'){
+    var idx=undefendedIdx();
+    if(idx<0)return null;
+    var att=S.table[idx].a;
+    var canBeat=handOf(o).some(function(d){return defBeats(d,att);});
+    return canBeat?null:'take';
+  }
+  if(S.phase==='attack'){
+    if(!S.table.length)return null;               // начало кона — атака за игроком
+    if(undefendedIdx()>=0)return null;            // ещё не отбито, подкидывать нельзя
+    if(S.table.length>=S.maxAtt||handOf(other(o)).length===0)return 'bito';
+    var vs=tableValues();
+    var canThrowAny=handOf(o).some(function(d){return !!vs[d.value];});
+    return canThrowAny?null:'bito';
+  }
+  return null;
+}
+/* Передача управления: бот думает, человек за общим устройством видит ширму.
+   Но если действие безальтернативно — выполняем его сами, без ширмы и без
+   лишних нажатий: игроку нечего решать. Экран при этом не переезжает, поэтому
+   сидящий не увидит чужую руку (та же причина, что и у паса в боевых режимах). */
 function durakNext(delay){
   var o=durakActor();
   if(!o){busy=true; render(); return;}
   if(seatKind(o)==='bot'){
     busy=true; render();
     schedule(function(){botDurak();},delay||900);
+    return;
+  }
+  var forced=forcedDurakAction(o);
+  if(forced){
+    busy=true; render();
+    toast(forced==='take'
+      ? (seatName(o)+' не отбился — забирает стол')
+      : (seatName(o)+': подкидывать нечем — бито'), o==='e');
+    schedule(function(){
+      if(forced==='take')durakTake(o); else durakBito(o);
+    },delay||900);
     return;
   }
   if(needVeil(o)){showVeil(o); return;}
