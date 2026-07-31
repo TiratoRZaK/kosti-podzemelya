@@ -9,6 +9,11 @@ config_version=5
 config/name="Кости Подземелья"
 config/description="Пошаговая дуэль кубами. Порт веб-прототипа."
 run/main_scene="res://scenes/main.tscn"
+config/icon="res://assets/icon.png"
+; Заставка при запуске: картинку не показываем — на телефоне она висела дольше
+; самого запуска и выглядела как зависание. Пустой тёмный кадр честнее.
+boot_splash/show_image=false
+boot_splash/bg_color=Color(0.055, 0.039, 0.078, 1)
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [display]
@@ -18,8 +23,12 @@ window/size/viewport_height=844
 window/handheld/orientation=1
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
+; экран не гаснет посреди партии: заодно Android не глушит Wi-Fi под собой
+window/energy_saving/keep_screen_on=true
 
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+; без ETC2/ASTC Android-экспорт отказывается собираться
+textures/vram_compression/import_etc2_astc=true

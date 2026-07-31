@@ -19,6 +19,7 @@ var state: Dictionary
 var rng := RandomNumberGenerator.new()
 var opponent := "bot"            # bot | human (хотсит) | remote (по сети)
 var my_seat := "p"               # своё сиденье: у клиента по сети — второе
+var foe_device := "Соперник"     # имя устройства соперника, приходит по сети
 var lan: Lan
 var lobby_layer: Control
 var lobby_box: VBoxContainer
@@ -58,6 +59,33 @@ var banner_panel: PanelContainer
 var _shot_path := ""
 var _shot_mode := ""
 
+# Дуракуб: своя машина состояний (Durak) и свой экран. Боевая раскладка ему не
+# годится — нет ни очков, ни жизней, ни истории ходов, зато есть стол из пар.
+var battle_root: Control
+var durak_layer: Control
+var in_durak := false
+var d_state: Dictionary
+var d_frozen: Array = []          # стол, задержанный на экране: «Бито»/«Взять» его сразу очищают
+var d_notice := ""                # крупное сообщение вместо подсказки («забираешь стол»)
+var d_foe_name: Label
+var d_foe_count: Label
+var d_foe_hand: HBoxContainer
+var d_discard: Label
+var d_info: Label
+var d_trump_mark: SuitMark
+var d_who: Label
+var d_toast_label: Label
+var d_table: GridContainer
+var d_hint: Label
+var d_my_name: Label
+var d_my_count: Label
+var d_hand: HFlowContainer
+var d_actions: HBoxContainer
+var d_talon: Label
+var rules_battle_box: VBoxContainer
+var rules_durak_box: VBoxContainer
+var menu_note: Label
+
 func _ready() -> void:
 	_parse_args()
 	rng.seed = 20260731
@@ -86,6 +114,26 @@ func _parse_args() -> void:
 			_shot_mode = "hotseat_round"
 		elif a == "--shot-lobby":
 			_shot_mode = "lobby"
+		elif a == "--shot-durak":
+			_shot_mode = "durak"
+		elif a == "--shot-durak-veil":
+			_shot_mode = "durak_veil"
+		elif a == "--shot-durak-rules":
+			_shot_mode = "durak_rules"
+		elif a == "--shot-durak-bot":
+			_shot_mode = "durak_bot"
+		elif a == "--shot-durak-net":
+			_shot_mode = "durak_net"
+		elif a == "--shot-big":
+			_shot_mode = "big"
+		elif a == "--shot-net-client":
+			_shot_mode = "net_client"
+		elif a == "--shot-net-round":
+			_shot_mode = "net_round"
+		elif a == "--shot-durak-take":
+			_shot_mode = "durak_take"
+		elif a == "--shot-durak-lose":
+			_shot_mode = "durak_lose"
 
 # ------------------------------------------------------------------ вид
 
@@ -146,6 +194,7 @@ func _build_ui() -> void:
 	for side in ["left", "right", "top", "bottom"]:
 		pad.add_theme_constant_override("margin_" + side, 14)
 	add_child(pad)
+	battle_root = pad
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 10)
 	pad.add_child(root)
@@ -161,7 +210,10 @@ func _build_ui() -> void:
 	board_grid.columns = 3
 	board_grid.add_theme_constant_override("h_separation", CELL_GAP)
 	board_grid.add_theme_constant_override("v_separation", CELL_GAP)
-	root.add_child(board_grid)
+	# по центру: на 3×3 клетка мельче ширины экрана, и доска прижималась влево
+	var board_wrap := CenterContainer.new()
+	board_wrap.add_child(board_grid)
+	root.add_child(board_wrap)
 	sel_info = _label("", 12, Palette.MUTED)
 	sel_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sel_info.custom_minimum_size.y = 32
@@ -177,12 +229,25 @@ func _build_ui() -> void:
 	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	strip_scroll.add_child(hist_strip)
 	root.add_child(strip_scroll)
-	# место под карточку хода держим всегда, иначе доска и рука прыгают
+	# Место под карточку хода держим всегда, иначе доска и рука прыгают. И держим
+	# его ЖЁСТКО: на большой доске жетонов бывает три ряда, карточка вырастала и
+	# выдавливала руку за нижний край экрана. Теперь лишнее прокручивается внутри
+	# карточки, а рука остаётся на месте.
 	card_box = VBoxContainer.new()
-	card_box.custom_minimum_size.y = 92
-	card_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	root.add_child(card_box)
+	card_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var card_scroll := ScrollContainer.new()
+	card_scroll.custom_minimum_size.y = 116
+	card_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	card_scroll.add_child(card_box)
+	root.add_child(card_scroll)
 	root.add_child(_my_zone())
+
+	# экран Дуракуба лежит рядом с боевым и включается вместо него; слои меню,
+	# ширмы и исходов идут выше и работают для обоих
+	durak_layer = _build_durak()
+	add_child(durak_layer)
 
 	menu_layer = _build_menu()
 	add_child(menu_layer)
@@ -190,8 +255,8 @@ func _build_ui() -> void:
 	add_child(veil_layer)
 	over_layer = _build_overlay()
 	add_child(over_layer)
-	rules_layer = _build_rules()
-	add_child(rules_layer)
+	# Правила строятся при первом открытии: там шесть картинок способностей по
+	# 512×512, и на старте они заметно задерживали появление меню.
 	lobby_layer = _build_lobby()
 	add_child(lobby_layer)
 	# баннер поверх всего: «РАУНД 2», «500!». Подложка обязательна — без неё
@@ -293,12 +358,649 @@ func _my_zone() -> Control:
 	bottom.add_child(my_deck)
 	bottom.add_child(_grow())
 	var rules_btn := _button("Правила", true)
-	rules_btn.pressed.connect(func(): rules_layer.visible = true)
+	rules_btn.pressed.connect(_show_rules)
 	bottom.add_child(rules_btn)
 	var menu_btn := _button("Меню", true)
 	menu_btn.pressed.connect(_show_menu)
 	bottom.add_child(menu_btn)
 	return panel
+
+# --------------------------------------------------------------- дуракуб: экран
+
+## Стол Дуракуба: шесть мест, в каждом атакующий куб и, если отбили, защитный
+## поверх него со сдвигом — как карты в подкидном. Масти цветные, козырь золотой.
+func _build_durak() -> Control:
+	var layer := Control.new()
+	layer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.visible = false
+	var pad := MarginContainer.new()
+	pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right", "top", "bottom"]:
+		pad.add_theme_constant_override("margin_" + side, 14)
+	layer.add_child(pad)
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 10)
+	pad.add_child(root)
+
+	var t := _label("КОСТИ ПОДЗЕМЕЛЬЯ", 25, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(t)
+	var tag := _label("ДУРАКУБ", 10, Palette.MUTED)
+	tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(tag)
+
+	var foe_panel := _panel()
+	root.add_child(foe_panel)
+	var fv := VBoxContainer.new()
+	foe_panel.add_child(fv)
+	var frow := HBoxContainer.new()
+	fv.add_child(frow)
+	d_foe_name = _label("", 10, Palette.MUTED)
+	frow.add_child(d_foe_name)
+	frow.add_child(_grow())
+	d_foe_count = _label("0", 20, Palette.GOLD_LIGHT, Palette.FONT_UI)
+	frow.add_child(d_foe_count)
+	var frow2 := HBoxContainer.new()
+	fv.add_child(frow2)
+	d_foe_hand = HBoxContainer.new()
+	d_foe_hand.add_theme_constant_override("separation", 6)
+	frow2.add_child(d_foe_hand)
+	frow2.add_child(_grow())
+	d_discard = _label("", 10, Palette.MUTED)
+	frow2.add_child(d_discard)
+
+	d_toast_label = _label("", 12, Palette.GOLD_LIGHT)
+	d_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	d_toast_label.custom_minimum_size.y = 18
+	root.add_child(d_toast_label)
+
+	var irow := HBoxContainer.new()
+	irow.add_theme_constant_override("separation", 5)
+	root.add_child(irow)
+	irow.add_child(_label("КОЗЫРЬ", 10, Palette.MUTED))
+	d_trump_mark = SuitMark.new()
+	d_trump_mark.custom_minimum_size = Vector2(13, 13)
+	d_trump_mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	d_trump_mark.setup(0, Palette.GOLD_LIGHT)
+	irow.add_child(d_trump_mark)
+	d_info = _label("", 10, Palette.MUTED)
+	irow.add_child(d_info)
+	irow.add_child(_grow())
+	d_who = _label("", 10, Palette.GOLD_LIGHT)
+	irow.add_child(d_who)
+
+	d_table = GridContainer.new()
+	d_table.columns = 3
+	d_table.add_theme_constant_override("h_separation", CELL_GAP)
+	d_table.add_theme_constant_override("v_separation", CELL_GAP)
+	root.add_child(d_table)
+
+	d_hint = _label("", 12, Palette.MUTED)
+	d_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	d_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	d_hint.custom_minimum_size.y = 34
+	root.add_child(d_hint)
+	root.add_child(_grow())
+
+	var my_panel := _panel()
+	root.add_child(my_panel)
+	var mv := VBoxContainer.new()
+	mv.add_theme_constant_override("separation", 8)
+	my_panel.add_child(mv)
+	var mrow := HBoxContainer.new()
+	mv.add_child(mrow)
+	d_my_name = _label("", 10, Palette.MUTED)
+	mrow.add_child(d_my_name)
+	mrow.add_child(_grow())
+	d_my_count = _label("0", 20, Palette.GOLD_LIGHT, Palette.FONT_UI)
+	mrow.add_child(d_my_count)
+	# После «Взять» кубов бывает и полтора десятка. Прокрутка тут не годится:
+	# полоса узкая, палец задевает кубы и получаются мисклики. Поэтому рука
+	# переносится на второй ряд, а сами кубы мельчают — всё видно сразу.
+	d_hand = HFlowContainer.new()
+	d_hand.add_theme_constant_override("h_separation", 6)
+	d_hand.add_theme_constant_override("v_separation", 6)
+	d_hand.alignment = FlowContainer.ALIGNMENT_CENTER
+	mv.add_child(d_hand)
+	d_actions = HBoxContainer.new()
+	d_actions.add_theme_constant_override("separation", 10)
+	d_actions.alignment = BoxContainer.ALIGNMENT_CENTER
+	d_actions.custom_minimum_size.y = 42
+	mv.add_child(d_actions)
+	var bottom := HBoxContainer.new()
+	mv.add_child(bottom)
+	d_talon = _label("", 10, Palette.MUTED)
+	bottom.add_child(d_talon)
+	bottom.add_child(_grow())
+	var rules_btn := _button("Правила", true)
+	rules_btn.pressed.connect(_show_rules)
+	bottom.add_child(rules_btn)
+	var menu_btn := _button("Меню", true)
+	menu_btn.pressed.connect(_show_menu)
+	bottom.add_child(menu_btn)
+	return layer
+
+## Куб с мастью. Значение крупно по центру, масть в углу; козырь подсвечен
+## золотом — иначе игрок каждый ход сверяется с надписью в шапке.
+func _d_die(die: Dictionary, px: int, trump: int, dim: bool = false, tilt: float = 0.0) -> Control:
+	var face: Dictionary = Palette.SUIT_FACE[int(die["suit"])]
+	var is_trump: bool = int(die["suit"]) == trump
+	var slot := Panel.new()
+	slot.custom_minimum_size = Vector2(px, px)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = face["bg"]
+	sb.set_corner_radius_all(int(px * 0.22))
+	sb.border_color = Palette.GOLD if is_trump else face["edge"]
+	sb.set_border_width_all(3 if is_trump else 2)
+	slot.add_theme_stylebox_override("panel", sb)
+	if dim:
+		slot.modulate = Color(1, 1, 1, 0.4)
+	if tilt != 0.0:
+		slot.pivot_offset = Vector2(px, px) * 0.5
+		slot.rotation = deg_to_rad(tilt)
+	var val := _label(str(int(die["value"])), int(px * 0.46), face["ink"], Palette.FONT_UI)
+	val.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	val.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	val.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.add_child(val)
+	var mark := SuitMark.new()
+	mark.setup(int(die["suit"]), Palette.GOLD_LIGHT if is_trump else face["ink"])
+	var m := px * 0.3
+	mark.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	mark.offset_left = -m - px * 0.1
+	mark.offset_top = px * 0.1
+	mark.offset_right = -px * 0.1
+	mark.offset_bottom = px * 0.1 + m
+	slot.add_child(mark)
+	return slot
+
+## Название куба словами. Значков мастей в шрифтах нет, а рисованный значок в
+## строку текста не вставить, поэтому в подсказках и сообщениях масть называется:
+## «пятёрка червей», «отбил четвёрку пик шестёркой бубён».
+const D_NUM := {
+	"nom": ["", "единица", "двойка", "тройка", "четвёрка", "пятёрка", "шестёрка"],
+	"acc": ["", "единицу", "двойку", "тройку", "четвёрку", "пятёрку", "шестёрку"],
+	"ins": ["", "единицей", "двойкой", "тройкой", "четвёркой", "пятёркой", "шестёркой"],
+}
+const D_SUIT_GEN := ["пик", "червей", "бубён", "крестей"]
+
+func _d_name(die: Dictionary, form: String = "nom") -> String:
+	return "%s %s" % [D_NUM[form][int(die["value"])], D_SUIT_GEN[int(die["suit"])]]
+
+# ------------------------------------------------------------ дуракуб: показ
+
+## Чьими глазами смотрим — как в боевых режимах, по shown_to, а не по тому, чья
+## роль: при безальтернативном действии роль уезжает без ширмы.
+func _d_viewer() -> String:
+	if d_state.is_empty():
+		return "p"
+	if MatchState.shared_device(d_state):
+		var shown := String(d_state["shown_to"])
+		if shown != "":
+			return shown
+		var a := Durak.actor(d_state)
+		return a if a != "" else "p"
+	return my_seat
+
+func _d_input_allowed() -> bool:
+	if d_state.is_empty() or busy or veil_layer.visible or menu_layer.visible or bool(d_state["over"]):
+		return false
+	var o := Durak.actor(d_state)
+	if o == "" or not (MatchState.seat_is_human(d_state, o) and MatchState.seat_local(d_state, o)):
+		return false
+	return not MatchState.shared_device(d_state) or String(d_state["shown_to"]) == o
+
+func d_toast(text: String, foe: bool = false) -> void:
+	d_toast_label.text = text
+	d_toast_label.add_theme_color_override("font_color", Palette.NEG if foe else Palette.GOLD_LIGHT)
+
+func _d_refresh() -> void:
+	if d_state.is_empty():
+		return
+	var me := _d_viewer()
+	var foe := MatchState.other_seat(d_state, me)
+	var my_hand: Array = Durak.hand_of(d_state, me)
+	var foe_hand: Array = Durak.hand_of(d_state, foe)
+	var acting := Durak.actor(d_state)
+	var trump := int(d_state["trump"])
+	var phase := String(d_state["phase"])
+	# стол на экране может отставать от состояния: «Бито» и «Взять» очищают его
+	# сразу, а игрок должен успеть увидеть, чем закончился кон
+	var table: Array = d_frozen if not d_frozen.is_empty() else d_state["table"]
+
+	d_my_name.text = MatchState.seat_name(d_state, me).to_upper()
+	d_foe_name.text = MatchState.seat_name(d_state, foe).to_upper()
+	d_my_count.text = "%d %s" % [my_hand.size(), _plural(my_hand.size(), "куб", "куба", "кубов")]
+	d_foe_count.text = "%d %s" % [foe_hand.size(), _plural(foe_hand.size(), "куб", "куба", "кубов")]
+	d_talon.text = "Колода: %d" % d_state["talon"].size()
+	d_discard.text = "Бито: %d" % int(d_state["discard"])
+	d_trump_mark.setup(trump, Palette.GOLD_LIGHT)
+	d_info.text = "· СТОЛ %d/%d" % [table.size(), int(d_state["max_att"])]
+
+	var i_act := acting == me
+	if acting == "":
+		d_who.text = "…"
+		d_who.add_theme_color_override("font_color", Palette.MUTED)
+	elif i_act:
+		# сидящий за экраном и есть действующий — обращаемся к нему напрямую
+		d_who.text = "ТЫ АТАКУЕШЬ" if phase == "attack" else "ОТБИВАЙСЯ!"
+		d_who.add_theme_color_override("font_color", Palette.GOLD_LIGHT if phase == "attack" else Palette.NEG)
+	else:
+		d_who.text = "ХОД: " + MatchState.seat_name(d_state, acting).to_upper()
+		d_who.add_theme_color_override("font_color", Palette.NEG)
+
+	for c in d_foe_hand.get_children():
+		c.queue_free()
+	for i in foe_hand.size():
+		var back := Panel.new()
+		back.custom_minimum_size = Vector2(22, 22)
+		back.add_theme_stylebox_override("panel", _mini_box())
+		d_foe_hand.add_child(back)
+
+	_d_rebuild_table(table, trump)
+	var valid := _d_valid(me)
+	_d_rebuild_hand(my_hand, valid, trump)
+	_d_rebuild_actions(me)
+	_d_update_hint(me, valid)
+
+func _d_rebuild_table(table: Array, trump: int) -> void:
+	for c in d_table.get_children():
+		c.queue_free()
+	# место в 1.12 высоты, поэтому по высоте считаем с этим коэффициентом; 470 —
+	# всё остальное на экране Дуракуба, включая руку в два ряда
+	var by_width: float = (390.0 - 28.0 - CELL_GAP * 2) / 3.0
+	var by_height: float = (get_viewport_rect().size.y - 470.0 - CELL_GAP) / 2.0 / 1.12
+	var cell_w: float = maxf(minf(by_width, by_height), 60.0)
+	# 0.58 — чтобы защитный куб перекрывал атакующий только углом: при 0.66 он
+	# налезал на само значение, и было не разобрать, чем атаковали
+	var die_px := int(cell_w * 0.58)
+	var undef := Durak.undefended_idx(d_state) if d_frozen.is_empty() else -1
+	for i in Durak.MAX_TABLE:
+		var slot := Panel.new()
+		slot.custom_minimum_size = Vector2(cell_w, cell_w * 1.12)
+		var pair = table[i] if i < table.size() else null
+		# место с неотбитым кубом светится золотом: видно, что бить надо именно его
+		slot.add_theme_stylebox_override("panel", _cell_box(false, pair != null, i == undef))
+		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		d_table.add_child(slot)
+		if pair == null:
+			continue
+		var att := _d_die(pair["a"], die_px, trump)
+		att.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+		att.offset_left = 6
+		att.offset_top = 6
+		att.offset_right = 6 + die_px
+		att.offset_bottom = 6 + die_px
+		slot.add_child(att)
+		if pair["d"] != null:
+			var dfn := _d_die(pair["d"], die_px, trump, false, 7.0)
+			dfn.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+			dfn.offset_left = -6 - die_px
+			dfn.offset_top = -6 - die_px
+			dfn.offset_right = -6
+			dfn.offset_bottom = -6
+			slot.add_child(dfn)
+
+func _d_rebuild_hand(hand: Array, valid: Array, trump: int) -> void:
+	for c in d_hand.get_children():
+		c.queue_free()
+	# кубы мельчают, когда их много: шесть — крупные, дальше по два ряда
+	var n := hand.size()
+	var px := 50
+	if n > 12:
+		px = 40
+	elif n > 6:
+		px = 44
+	for idx in _d_hand_order(hand, trump):
+		var i := int(idx)
+		var ok: bool = valid.has(i)
+		var d := _d_die(hand[i], px, trump, not ok)
+		if ok:
+			d.mouse_filter = Control.MOUSE_FILTER_STOP
+			d.gui_input.connect(func(e: InputEvent):
+				if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+					_d_hand_pressed(i)
+			)
+		else:
+			d.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		d_hand.add_child(d)
+
+## Порядок показа руки: сначала обычные масти (внутри — по возрастанию значения),
+## козыри в конец. Сортируется **только вид**: состояние и индексы остаются как
+## есть, иначе по сети действие применилось бы к другому кубу.
+func _d_hand_order(hand: Array, trump: int) -> Array:
+	var order := []
+	for i in hand.size():
+		order.append(i)
+	order.sort_custom(func(a, b):
+		var da: Dictionary = hand[int(a)]
+		var db: Dictionary = hand[int(b)]
+		var ta: int = 1 if int(da["suit"]) == trump else 0
+		var tb: int = 1 if int(db["suit"]) == trump else 0
+		if ta != tb:
+			return ta < tb
+		if int(da["suit"]) != int(db["suit"]):
+			return int(da["suit"]) < int(db["suit"])
+		return int(da["value"]) < int(db["value"])
+	)
+	return order
+
+## Чем местный человек может действовать прямо сейчас. Пусто, если ход не его.
+func _d_valid(me: String) -> Array:
+	var out := []
+	if not _d_input_allowed() or Durak.actor(d_state) != me or not d_frozen.is_empty():
+		return out
+	var hand: Array = Durak.hand_of(d_state, me)
+	if String(d_state["phase"]) == "attack":
+		if d_state["table"].size() >= int(d_state["max_att"]):
+			return out
+		if Durak.hand_of(d_state, MatchState.other_seat(d_state, me)).is_empty():
+			return out
+		for i in hand.size():
+			if Durak.can_throw(d_state, hand[i]):
+				out.append(i)
+		return out
+	var idx := Durak.undefended_idx(d_state)
+	if idx < 0:
+		return out
+	var att: Dictionary = d_state["table"][idx]["a"]
+	for i in hand.size():
+		if Durak.beats(hand[i], att, int(d_state["trump"])):
+			out.append(i)
+	return out
+
+func _d_rebuild_actions(me: String) -> void:
+	for c in d_actions.get_children():
+		c.queue_free()
+	if not _d_input_allowed() or Durak.actor(d_state) != me or not d_frozen.is_empty():
+		return
+	var phase := String(d_state["phase"])
+	if phase == "attack" and not d_state["table"].is_empty() and Durak.undefended_idx(d_state) < 0:
+		var b := _button("Бито")
+		b.pressed.connect(func(): _d_bito(me))
+		d_actions.add_child(b)
+	elif phase == "defend":
+		var b2 := _button("Взять")
+		b2.pressed.connect(func(): _d_take(me))
+		d_actions.add_child(b2)
+
+func _d_update_hint(me: String, valid: Array) -> void:
+	# важное сообщение («забираешь стол») перебивает обычную подсказку и держится,
+	# пока его не снимет тот, кто поставил
+	if d_notice != "":
+		d_hint.add_theme_font_size_override("font_size", 15)
+		d_hint.add_theme_color_override("font_color", Palette.GOLD_LIGHT)
+		d_hint.text = d_notice
+		return
+	d_hint.add_theme_font_size_override("font_size", 12)
+	d_hint.add_theme_color_override("font_color", Palette.MUTED)
+	if not _d_input_allowed() or Durak.actor(d_state) != me:
+		var acting := Durak.actor(d_state)
+		var k := MatchState.seat_kind(d_state, acting) if acting != "" else ""
+		if k == "bot":
+			d_hint.text = "Соперник думает…"
+		elif k == "remote":
+			d_hint.text = "Ход соперника…"
+		else:
+			d_hint.text = "Секунду…"
+		return
+	if String(d_state["phase"]) == "attack":
+		if d_state["table"].is_empty():
+			d_hint.text = "Атакуй любым кубом."
+		elif valid.is_empty():
+			d_hint.text = "Подкидывать нечем — жми «Бито»."
+		else:
+			d_hint.text = "Подкинь куб со значением как на столе или жми «Бито»."
+		return
+	var idx := Durak.undefended_idx(d_state)
+	if idx < 0:
+		d_hint.text = ""
+		return
+	var att: Dictionary = d_state["table"][idx]["a"]
+	if valid.is_empty():
+		d_hint.text = "Побить %s нечем — придётся брать стол." % _d_name(att, "acc")
+	else:
+		d_hint.text = "Побей %s: нужен куб старше той же масти или любой козырь." % _d_name(att, "acc")
+
+# ------------------------------------------------------------ дуракуб: поток
+
+## seed_value < 0 — партию начинаем сами и, если играем по сети, объявляем сид
+## сопернику; иначе сид пришёл от хоста и раздача у обоих совпадёт.
+func _start_durak(seed_value: int = -1) -> void:
+	menu_layer.visible = false
+	over_layer.visible = false
+	in_durak = true
+	battle_root.visible = false
+	durak_layer.visible = true
+	state = {}
+	d_frozen = []
+	var sd := seed_value if seed_value >= 0 else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
+	if seed_value < 0 and opponent == "remote" and lan != null and lan.is_host:
+		lan.send_start("durak", sd)
+	d_state = Durak.new_game(sd, opponent, my_seat, foe_device)
+	d_toast("")
+	busy = true
+	_d_refresh()
+	banner("ДУРАКУБ")
+	await _durak_next(1.0)
+
+## Единственная точка передачи роли: бот, безальтернативное действие, ширма или
+## ожидание ввода. Ровно как beginTurn в боевых режимах.
+func _durak_next(delay: float = 0.7) -> void:
+	if d_state.is_empty():
+		return
+	if bool(d_state["over"]):
+		await _d_finish()
+		return
+	var o := Durak.actor(d_state)
+	if o == "":
+		busy = true
+		_d_refresh()
+		return
+	if MatchState.seat_kind(d_state, o) == "bot":
+		busy = true
+		_d_refresh()
+		await get_tree().create_timer(delay).timeout
+		if d_state.is_empty() or not in_durak:
+			return
+		await _d_bot()
+		return
+	# за удалённым сиденьем действует чужое устройство — ждём сообщения. Проверка
+	# идёт ДО безальтернативного действия: иначе оба устройства выполнили бы его
+	# сами и продублировали кон.
+	if MatchState.seat_kind(d_state, o) == "remote":
+		busy = true
+		_d_refresh()
+		return
+	# безальтернативное действие ширмы не требует: выбора нет, стол и так открыт
+	var forced := Durak.forced_action(d_state, o)
+	if forced != "":
+		busy = true
+		_d_refresh()
+		var who := MatchState.seat_name(d_state, o)
+		var why := "%s не отбился — забирает стол" % who if forced == "take" \
+			else "%s: подкидывать нечем — бито" % who
+		d_toast(why, o != _d_viewer())
+		await get_tree().create_timer(delay).timeout
+		if d_state.is_empty() or not in_durak:
+			return
+		if forced == "take":
+			await _d_take(o)
+		else:
+			await _d_bito(o)
+		return
+	if MatchState.needs_veil(d_state, o):
+		_show_veil(o)
+		return
+	d_state["shown_to"] = o
+	busy = false
+	_d_refresh()
+
+func _d_bot() -> void:
+	var o := Durak.actor(d_state)
+	if o == "" or MatchState.seat_kind(d_state, o) != "bot":
+		return
+	var act := Durak.bot_action(d_state)
+	if act.is_empty():
+		# ходить нечем и кон не закрыт — такого быть не должно, но экран не вешаем
+		if String(d_state["phase"]) == "attack" and not d_state["table"].is_empty():
+			await _d_bito(o)
+		else:
+			busy = true
+			_d_refresh()
+		return
+	match String(act["act"]):
+		"attack":
+			await _d_attack(o, int(act["hand"]))
+		"defend":
+			await _d_defend(o, int(act["hand"]))
+		"bito":
+			await _d_bito(o)
+		"take":
+			await _d_take(o)
+
+## По сети уходит само действие, а не состояние: сиденье, что сделал и каким
+## кубом руки. Раздача у обоих от одного сида, поэтому индекса достаточно.
+func _d_send(seat: String, act: String, idx: int = -1) -> void:
+	if opponent == "remote" and lan != null and lan.connected:
+		lan.send_durak_action(seat, act, idx)
+
+func _on_lan_durak_action(seat: String, act: String, hand_idx: int) -> void:
+	if d_state.is_empty() or not in_durak:
+		return
+	match act:
+		"attack":
+			await _d_attack(seat, hand_idx, false)
+		"defend":
+			await _d_defend(seat, hand_idx, false)
+		"bito":
+			await _d_bito(seat, false)
+		"take":
+			await _d_take(seat, false)
+
+func _d_hand_pressed(idx: int) -> void:
+	if not _d_input_allowed():
+		return
+	var o := Durak.actor(d_state)
+	if o != _d_viewer():
+		return
+	if String(d_state["phase"]) == "attack":
+		await _d_attack(o, idx)
+	else:
+		await _d_defend(o, idx)
+
+## broadcast=false — действие пришло по сети и рассылать его обратно нельзя.
+func _d_attack(seat: String, idx: int, broadcast: bool = true) -> void:
+	var first: bool = d_state["table"].is_empty()
+	var res := Durak.attack(d_state, seat, idx)
+	if res.is_empty():
+		return
+	if broadcast:
+		_d_send(seat, "attack", idx)
+	busy = true
+	buzz(20)
+	d_toast("%s %s %s" % [MatchState.seat_name(d_state, seat),
+		"атакует:" if first else "подкидывает:", _d_name(res["die"])], seat != _d_viewer())
+	_d_refresh()
+	await get_tree().create_timer(0.55).timeout
+	if d_state.is_empty() or not in_durak:
+		return
+	await _durak_next(0.7)
+
+func _d_defend(seat: String, idx: int, broadcast: bool = true) -> void:
+	var res := Durak.defend(d_state, seat, idx)
+	if res.is_empty():
+		return
+	if broadcast:
+		_d_send(seat, "defend", idx)
+	busy = true
+	buzz(20)
+	d_toast("%s отбил %s %s" % [MatchState.seat_name(d_state, seat),
+		_d_name(res["against"], "acc"), _d_name(res["die"], "ins")], seat != _d_viewer())
+	_d_refresh()
+	await get_tree().create_timer(0.55).timeout
+	if d_state.is_empty() or not in_durak:
+		return
+	await _durak_next(0.7)
+
+func _d_bito(seat: String, broadcast: bool = true) -> void:
+	if String(d_state["phase"]) != "attack" or Durak.undefended_idx(d_state) >= 0:
+		return
+	d_frozen = d_state["table"].duplicate()
+	var res := Durak.bito(d_state, seat)
+	if res.is_empty():
+		d_frozen = []
+		return
+	if broadcast:
+		_d_send(seat, "bito")
+	busy = true
+	d_toast("Бито")
+	_d_refresh()
+	await get_tree().create_timer(0.65).timeout
+	d_frozen = []
+	if d_state.is_empty() or not in_durak:
+		return
+	_d_refresh()
+	await _durak_next(0.8)
+
+func _d_take(seat: String, broadcast: bool = true) -> void:
+	if String(d_state["phase"]) != "defend":
+		return
+	d_frozen = d_state["table"].duplicate()
+	var res := Durak.take(d_state, seat)
+	if res.is_empty():
+		d_frozen = []
+		return
+	if broadcast:
+		_d_send(seat, "take")
+	busy = true
+	buzz(120)
+	# кубы приезжают в руку мгновенно и незаметно. Баннер по центру лёг бы на сам
+	# стол, который игрок как раз должен разглядеть, поэтому говорим крупно в
+	# строке подсказки и держим паузу подольше.
+	var taken := 0
+	for pair in d_frozen:
+		taken += 1 if pair["d"] == null else 2
+	var mine := seat == _d_viewer()
+	var phrase := "+%d %s в руку" % [taken, _plural(taken, "куб", "куба", "кубов")]
+	d_notice = ("ЗАБИРАЕШЬ СТОЛ · %s" % phrase) if mine \
+		else ("СОПЕРНИК ЗАБИРАЕТ СТОЛ · %s" % phrase)
+	d_toast("%s забирает стол" % MatchState.seat_name(d_state, seat), not mine)
+	_d_refresh()
+	await get_tree().create_timer(1.4).timeout
+	d_notice = ""
+	d_frozen = []
+	if d_state.is_empty() or not in_durak:
+		return
+	_d_refresh()
+	await _durak_next(0.8)
+
+## Исход партии. Дуракуб — тот, кто остался с кубами; против бота говорим на «ты».
+func _d_finish() -> void:
+	busy = true
+	_d_refresh()
+	await get_tree().create_timer(0.6).timeout
+	if d_state.is_empty() or not in_durak:
+		return
+	var loser := String(d_state["outcome"]["loser"])
+	var mine := _my_view(d_state)
+	var title := "НИЧЬЯ"
+	var text := "Оба вышли одновременно — дуракубов сегодня нет."
+	if loser != "":
+		var winner := MatchState.other_seat(d_state, loser)
+		if _solo(d_state) and loser == mine:
+			# та самая фраза, из-за которой в это вообще играют
+			title = "ТЫ ДУРАКУБ!"
+			text = "Ты остался с кубами. Позор на все подземелья."
+		elif _solo(d_state):
+			title = "ПОБЕДА!"
+			text = "Соперник остался с кубами — дуракуб он."
+		else:
+			title = MatchState.seat_name(d_state, loser).to_upper() + " — ДУРАКУБ!"
+			text = "%s вышел первым, а %s остался с кубами." % [
+				MatchState.seat_name(d_state, winner), MatchState.seat_name(d_state, loser)]
+	_show_result(title, text, "Ещё раз", _start_durak)
 
 # ------------------------------------------------------------------ слои
 
@@ -329,6 +1031,12 @@ func _build_menu() -> Control:
 	var hint := _label("Выбери режим", 12, Palette.MUTED)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(hint)
+	# сообщения, пока открыто меню: обычный тост лежит под этим слоем и не виден
+	menu_note = _label("", 11, Palette.GOLD_LIGHT)
+	menu_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	menu_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	menu_note.custom_minimum_size.x = 300
+	v.add_child(menu_note)
 
 	var toggle := CheckBox.new()
 	toggle.text = "2 игрока на одном телефоне"
@@ -339,6 +1047,7 @@ func _build_menu() -> Control:
 
 	for key in MatchState.MODE_ORDER:
 		v.add_child(_mode_button(key, MatchState.MODES[key]))
+	v.add_child(_mode_button("durak", MatchState.DURAK_MODE))
 	var lan_btn := _button("Играть по Wi-Fi")
 	lan_btn.pressed.connect(_show_lobby)
 	v.add_child(lan_btn)
@@ -485,12 +1194,13 @@ func _lobby_message(text: String, with_back: bool = true) -> void:
 
 func _lan_host() -> void:
 	_ensure_lan()
-	if not lan.start_host("Хост"):
+	# представляемся моделью устройства: соперник увидит «Redmi Note 12», а не IP
+	if not lan.start_host(Lan.device_name()):
 		_lobby_message("Не удалось открыть игру: порт занят. Закрой другую копию игры и попробуй снова.")
 		return
 	my_seat = "p"
 	opponent = "remote"
-	_lobby_message("Ждём соперника…\nПусть он нажмёт «Найти игру».")
+	_lobby_message("Ждём соперника…\nПусть он нажмёт «Найти игру».\n\nТвоё устройство: %s" % Lan.device_name())
 
 func _lan_find() -> void:
 	_ensure_lan()
@@ -508,6 +1218,8 @@ func _ensure_lan() -> void:
 	lan.match_started.connect(_on_lan_match_started)
 	lan.move_received.connect(_on_lan_move)
 	lan.next_round_received.connect(_on_lan_next_round)
+	lan.durak_action_received.connect(_on_lan_durak_action)
+	lan.peer_named.connect(_on_lan_peer_named)
 
 func _on_lan_hosts(list: Array) -> void:
 	if list.is_empty():
@@ -519,10 +1231,18 @@ func _on_lan_hosts(list: Array) -> void:
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lobby_box.add_child(t)
 	for h in list:
-		var b := _button("%s · %s" % [String(h["name"]), String(h["address"])])
+		# имя устройства крупно, IP не показываем совсем — он ни о чём не говорит.
+		# Если рядом два одинаковых телефона, различить поможет последний октет.
+		var addr := String(h["address"])
+		var tail := addr.substr(addr.rfind(".") + 1)
+		var label := String(h["name"])
+		if label == "" or label == "GenericDevice":
+			label = "Устройство %s" % tail
+		var b := _button(label)
 		b.pressed.connect(func():
 			my_seat = "e"       # у клиента своё сиденье второе
 			opponent = "remote"
+			foe_device = String(h["name"])
 			if not lan.join(String(h["address"])):
 				_lobby_message("Не удалось подключиться. Попробуй ещё раз.")
 			else:
@@ -533,17 +1253,30 @@ func _on_lan_hosts(list: Array) -> void:
 	back.pressed.connect(_lobby_idle)
 	lobby_box.add_child(back)
 
+func _on_lan_peer_named(name_of_peer: String) -> void:
+	if name_of_peer == "" or name_of_peer == "GenericDevice":
+		return
+	foe_device = name_of_peer
+	# имя могло прийти уже после начала партии — подставляем на месте
+	for st in [state, d_state]:
+		if not st.is_empty() and st.has("seats"):
+			for seat in st["order"]:
+				if String(st["seats"][seat]["kind"]) == "remote":
+					st["seats"][seat]["name"] = foe_device
+	_refresh_screen()
+
 func _on_lan_connected() -> void:
+	lan.send_hello()          # обе стороны сразу представляются
 	if lan.is_host:
 		# хост выбирает режим; клиент ждёт объявления партии
 		lobby_layer.visible = false
 		menu_layer.visible = true
-		toast("Соперник подключился — выбери режим")
+		menu_note.text = "Соперник подключился — выбери режим."
 	else:
 		_lobby_message("Подключились! Ждём, пока хост выберет режим…", false)
 
 func _on_lan_lost() -> void:
-	if state.is_empty():
+	if state.is_empty() and d_state.is_empty():
 		_lobby_message("Соперник отключился.")
 	else:
 		busy = true
@@ -554,7 +1287,14 @@ func _on_lan_match_started(mode: String, seed_value: int) -> void:
 	lobby_layer.visible = false
 	menu_layer.visible = false
 	opponent = "remote"
-	state = MatchState.new_match(mode, seed_value, "remote", my_seat)
+	if mode == "durak":
+		await _start_durak(seed_value)
+		return
+	in_durak = false
+	d_state = {}
+	durak_layer.visible = false
+	battle_root.visible = true
+	state = MatchState.new_match(mode, seed_value, "remote", my_seat, foe_device)
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -602,16 +1342,41 @@ func _build_rules() -> Control:
 	var t := _label("Правила", 24, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(t)
-	v.add_child(_rules_head("Ход"))
-	v.add_child(_rules_line("Выбери куб в руке и поставь на пустую клетку или съешь вражеский."))
-	v.add_child(_rules_line("Базовый куб ест куб со значением не больше своего: шестёрка ест всех, единица — только единицу."))
-	v.add_child(_rules_head("Очки за ход"))
-	v.add_child(_rules_line("Съел — значение съеденного куба."))
-	v.add_child(_rules_line("Кубы на поле — сумма значений всех твоих кубов, начисляется каждый ход."))
-	v.add_child(_rules_line("Комбо из твоих кубов: пара +5, две пары +10, сет +15, фулл-хаус +25, каре +40, пятёрка +60, шестёрка +100."))
-	v.add_child(_rules_head("Особые кубы"))
+
+	rules_battle_box = VBoxContainer.new()
+	rules_battle_box.add_theme_constant_override("separation", 8)
+	v.add_child(rules_battle_box)
+	var rb := rules_battle_box
+	rb.add_child(_rules_head("Ход"))
+	rb.add_child(_rules_line("Выбери куб в руке и поставь на пустую клетку или съешь вражеский."))
+	rb.add_child(_rules_line("Базовый куб ест куб со значением не больше своего: шестёрка ест всех, единица — только единицу."))
+	rb.add_child(_rules_head("Очки за ход"))
+	rb.add_child(_rules_line("Съел — значение съеденного куба."))
+	rb.add_child(_rules_line("Кубы на поле — сумма значений всех твоих кубов, начисляется каждый ход."))
+	rb.add_child(_rules_line("Комбо из твоих кубов: пара +5, две пары +10, сет +15, фулл-хаус +25, каре +40, пятёрка +60, шестёрка +100."))
+	rb.add_child(_rules_head("Особые кубы"))
 	for key in ["shield", "spikes", "mine", "jaw", "friendly", "warlock"]:
-		v.add_child(_ability_row(key))
+		rb.add_child(_ability_row(key))
+
+	rules_durak_box = VBoxContainer.new()
+	rules_durak_box.add_theme_constant_override("separation", 8)
+	rules_durak_box.visible = false
+	v.add_child(rules_durak_box)
+	var rd := rules_durak_box
+	rd.add_child(_rules_head("Дуракуб"))
+	rd.add_child(_rules_line("Подкидной дурак кубами: 24 куба, четыре масти по значениям от 1 до 6."))
+	rd.add_child(_rules_line("Козырь — масть нижнего куба колоды, он написан в шапке. Козырные кубы обведены золотом."))
+	rd.add_child(_rules_head("Атака и отбой"))
+	rd.add_child(_rules_line("Атакующий выкладывает куб, защитник бьёт его старшим той же масти или любым козырём."))
+	rd.add_child(_rules_line("Отбил — атакующий может подкинуть куб со значением, которое уже лежит на столе."))
+	rd.add_child(_rules_line("Подкидывать больше нечего или незачем — «Бито»: стол уходит в отбой, роли меняются."))
+	rd.add_child(_rules_line("Не отбился — «Взять»: весь стол уходит в руку, атакует тот же соперник."))
+	rd.add_child(_rules_line("Атак в коне не больше, чем кубов было в руке защитника, и не больше шести."))
+	rd.add_child(_rules_head("Конец партии"))
+	rd.add_child(_rules_line("После кона руки добираются до шести из колоды, первым добирает атакующий."))
+	rd.add_child(_rules_line("Колода кончилась и кто-то вышел без кубов — партия всё. Остался с кубами — ты дуракуб."))
+	rd.add_child(_rules_line("Способностей и очков здесь нет — только масти, значения и козырь."))
+
 	var b := _button("Понятно")
 	b.pressed.connect(func(): rules_layer.visible = false)
 	v.add_child(b)
@@ -670,15 +1435,34 @@ func _show_menu() -> void:
 	menu_layer.visible = true
 	veil_layer.visible = false
 	over_layer.visible = false
+	menu_note.text = ""
+	_hide_banner()
+
+func _show_rules() -> void:
+	if rules_layer == null:
+		rules_layer = _build_rules()
+		add_child(rules_layer)
+	# правила у Дуракуба свои: ни очков, ни способностей — только масти и козырь
+	rules_battle_box.visible = not in_durak
+	rules_durak_box.visible = in_durak
+	rules_layer.visible = true
+	_hide_banner()
 
 func _start_mode(key: String) -> void:
+	if key == "durak":
+		await _start_durak()
+		return
 	menu_layer.visible = false
 	over_layer.visible = false
+	in_durak = false
+	d_state = {}
+	durak_layer.visible = false
+	battle_root.visible = true
 	selected = -1
 	var seed_value := int(Time.get_unix_time_from_system()) & 0x7fffffff
 	if opponent == "remote" and lan != null and lan.is_host:
 		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
-	state = MatchState.new_match(key, seed_value, opponent, my_seat)
+	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_device)
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -719,15 +1503,29 @@ func _begin_turn(seat: String) -> void:
 func _show_veil(seat: String) -> void:
 	busy = true
 	selected = -1
-	veil_title.text = "%s, твой ход" % MatchState.seat_name(state, seat)
+	# баннер раунда живёт своей анимацией и успевает лечь поверх заголовка ширмы
+	_hide_banner()
+	var st: Dictionary = d_state if in_durak else state
+	veil_title.text = "%s, твой ход" % MatchState.seat_name(st, seat)
 	veil_layer.visible = true
-	_refresh()
+	_refresh_screen()
 
 func _hide_veil() -> void:
 	veil_layer.visible = false
-	state["shown_to"] = String(state["turn"])
+	if in_durak:
+		d_state["shown_to"] = Durak.actor(d_state)
+	else:
+		state["shown_to"] = String(state["turn"])
 	busy = false
-	_refresh()
+	_refresh_screen()
+
+## Перерисовка того экрана, который сейчас открыт. Ширма, исходы и меню общие для
+## боевых режимов и Дуракуба, а состояния у них разные.
+func _refresh_screen() -> void:
+	if in_durak:
+		_d_refresh()
+	else:
+		_refresh()
 
 func _hide_banner() -> void:
 	# баннер живёт своей анимацией и успевает наложиться на кнопки оверлея.
@@ -748,11 +1546,16 @@ func _show_result(title: String, detail: String, button: String, on_press: Calla
 				box = c.get_child(0).get_child(0)
 	for c in box.get_children():
 		c.queue_free()
+	# перенос обязателен: без него длинная фраза растягивала панель за края экрана
 	var t := _label(title, 22, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	t.custom_minimum_size.x = 300
 	box.add_child(t)
 	var d := _label(detail, 13, Palette.TEXT)
 	d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	d.custom_minimum_size.x = 300
 	box.add_child(d)
 	# В сетевой игре раунд двигает только хост: если кнопку нажмут оба, раунд
 	# продвинется дважды и состояния разъедутся.
@@ -801,9 +1604,10 @@ func _refresh() -> void:
 	var turn := String(state["turn"])
 	var move_no: int = mini(int(state["players"][turn]["moves"]) + 1, int(cfg["moves"]))
 	turn_info.text = "РАУНД %d · ХОД %d/%d" % [int(state["round"]), move_no, int(cfg["moves"])]
-	var vs_bot := MatchState.seat_kind(state, "e") == "bot"
-	if turn == me and vs_bot:
+	if _solo(state) and turn == me:
 		turn_who.text = "ТВОЙ ХОД"
+	elif _solo(state):
+		turn_who.text = "ХОД СОПЕРНИКА"
 	else:
 		turn_who.text = "ХОД: " + MatchState.seat_name(state, turn).to_upper()
 	turn_who.add_theme_color_override("font_color", Palette.GOLD_LIGHT if turn == me else Palette.NEG)
@@ -882,7 +1686,7 @@ func _rebuild_board(me: String) -> void:
 	for c in board_grid.get_children():
 		c.queue_free()
 	var cols := int(state["cfg"]["cols"])
-	var cell_w: float = (390.0 - 28.0 - CELL_GAP * (cols - 1)) / float(cols)
+	var cell_w := _cell_size(cols, state["board"].size())
 	var valid := _valid_cells(me)
 	var hint_cell: int = int(hint.get("cell", -1)) if (not hint.is_empty() and selected == int(hint.get("hand", -1))) else -1
 	for i in state["board"].size():
@@ -906,8 +1710,24 @@ func _rebuild_board(me: String) -> void:
 			# скрытый тип виден только владельцу и только его глазами
 			var hidden: bool = bool(Rules.TYPES[String(cell["type"])]["hidden"])
 			var seen: bool = String(cell["owner"]) == me
-			d.setup(int(cell["v"]), String(cell["type"]), String(cell["owner"]) == me,
+			# лицо куба привязано к СИДЕНЬЮ, а не к «свой/чужой»: кость — первое
+			# сиденье, кровь — второе. Иначе у второго игрока кубы в руке красные,
+			# а на доске становились белыми
+			d.setup(int(cell["v"]), String(cell["type"]), String(cell["owner"]) == "p",
 				not hidden or seen, int(cell["shield"]))
+
+## Размер клетки: по ширине экрана, но не выше того, что осталось от высоты.
+## На поле 3×3 и на невысоких экранах доска иначе не влезает вместе с рукой.
+## 582 — всё, кроме доски: титул, зона соперника, тост, шапка хода, подсказка,
+## лента, карточка, своя зона с рукой и отступы между ними. Мерено по снимку на
+## 390×844: на поле 3×2 клетку это не трогает, а на 3×3 она мельчает, и рука
+## перестаёт уезжать под край экрана.
+func _cell_size(cols: int, cells: int) -> float:
+	var rows: int = ceili(float(cells) / float(cols))
+	var by_width: float = (390.0 - 28.0 - CELL_GAP * (cols - 1)) / float(cols)
+	var budget: float = get_viewport_rect().size.y - 582.0
+	var by_height: float = (budget - CELL_GAP * (rows - 1)) / float(rows)
+	return maxf(minf(by_width, by_height), 56.0)
 
 func _rebuild_hand(me: String) -> void:
 	for c in hand_row.get_children():
@@ -1030,23 +1850,49 @@ func _after_move() -> void:
 		"turn":
 			await _begin_turn(String(ev["seat"]))
 
-## Фразы исхода раунда. Против бота обращаемся на «ты», между людьми — по именам,
-## и всегда говорим, что именно произошло, а не только счёт.
+## За экраном один человек — против бота и по сети. Тогда о нём говорим на «ты», а
+## о сопернике в третьем лице. В хотсите за экраном двое, там только имена.
+## Раньше это условие было «против бота», и по сети получалось «Ты теряет ♥»:
+## имя своего сиденья в сетевой игре — «Ты», а фраза строилась в третьем лице.
+func _solo(st: Dictionary) -> bool:
+	return not st.is_empty() and not MatchState.shared_device(st)
+
+## Подлежащее и сказуемое разом: «ты теряешь» / «Соперник теряет».
+func _says(st: Dictionary, seat: String, second: String, third: String) -> String:
+	if _solo(st) and seat == _my_view(st):
+		return "ты " + second
+	var who := "Соперник" if _solo(st) else MatchState.seat_name(st, seat)
+	return "%s %s" % [who, third]
+
+## Кто смотрит в экран: в хотсите — тот, кому он открыт, иначе своё сиденье.
+func _my_view(st: Dictionary) -> String:
+	if st.is_empty():
+		return "p"
+	if MatchState.shared_device(st):
+		var shown := String(st["shown_to"])
+		return shown if shown != "" else String(st.get("turn", "p"))
+	return my_seat
+
+## Имя в именительном падеже для заголовков: «ТЫ», «СОПЕРНИК», «ИГРОК 2».
+func _who_name(st: Dictionary, seat: String) -> String:
+	if _solo(st):
+		return "ТЫ" if seat == _my_view(st) else "СОПЕРНИК"
+	return MatchState.seat_name(st, seat).to_upper()
+
+## Фразы исхода раунда: всегда говорим, что именно произошло, а не только счёт.
 func _round_phrases(winner: String, detail: String) -> Dictionary:
-	var vs_bot := MatchState.seat_kind(state, "e") == "bot"
 	if winner == "":
 		return {"title": "НИЧЬЯ В РАУНДЕ", "text": detail + " — никто не теряет ♥"}
 	var loser := MatchState.other_seat(state, winner)
+	var mine := _my_view(state)
 	var title := ""
-	if vs_bot:
-		title = "РАУНД ТВОЙ!" if winner == "p" else "РАУНД ЗА ВРАГОМ"
+	if _solo(state):
+		title = "РАУНД ТВОЙ!" if winner == mine else "РАУНД ЗА СОПЕРНИКОМ"
 	else:
 		title = MatchState.seat_name(state, winner).to_upper() + " БЕРЁТ РАУНД"
 	var text := detail
 	if String(state["cfg"]["kind"]) == "lives":
-		var who := "ты теряешь" if (vs_bot and loser == "p") else \
-			("враг теряет" if vs_bot else MatchState.seat_name(state, loser) + " теряет")
-		text = "%s — %s ♥" % [detail, who]
+		text = "%s — %s ♥" % [detail, _says(state, loser, "теряешь", "теряет")]
 	elif String(state["cfg"]["kind"]) == "bo3":
 		text = "%s · победы %d : %d" % [detail,
 			int(state["players"]["p"]["wins"]), int(state["players"]["e"]["wins"])]
@@ -1055,25 +1901,28 @@ func _round_phrases(winner: String, detail: String) -> Dictionary:
 ## Фразы конца матча. «Победа / Жизни 3:0» звучало как отчёт судьи, поэтому
 ## говорим человеческим языком: кто и почему выиграл.
 func _match_phrases(winner: String) -> Dictionary:
-	var vs_bot := MatchState.seat_kind(state, "e") == "bot"
 	var kind := String(state["cfg"]["kind"])
-	var p_name := MatchState.seat_name(state, "p")
-	var e_name := MatchState.seat_name(state, "e")
+	var mine := _my_view(state)
+	var solo := _solo(state)
+	var vs_bot := MatchState.seat_kind(state, MatchState.other_seat(state, mine)) == "bot"
 	var title := "НИЧЬЯ"
 	if winner != "":
-		if vs_bot:
-			title = "ПОБЕДА!" if winner == "p" else "ПОРАЖЕНИЕ"
+		if solo:
+			title = "ПОБЕДА!" if winner == mine else "ПОРАЖЕНИЕ"
 		else:
 			title = MatchState.seat_name(state, winner).to_upper() + " ПОБЕДИЛ!"
 	var text := ""
 	match kind:
 		"lives":
+			var loser := MatchState.other_seat(state, winner) if winner != "" else ""
 			if winner == "":
 				text = "Жизни кончились у обоих одновременно."
-			elif vs_bot:
-				text = "Враг повержен!" if winner == "p" else "Подземелье забрало твои кости."
+			elif solo and winner == mine:
+				text = "Враг повержен!" if vs_bot else "Соперник остался без жизней!"
+			elif solo:
+				text = "Подземелье забрало твои кости." if vs_bot else "Ты остался без жизней."
 			else:
-				text = "%s остался без жизней." % MatchState.other_seat(state, winner).replace("p", p_name).replace("e", e_name)
+				text = "%s остался без жизней." % MatchState.seat_name(state, loser)
 		"race":
 			var target := int(state["cfg"]["target"])
 			var sp := int(state["players"]["p"]["score"])
@@ -1081,21 +1930,24 @@ func _match_phrases(winner: String) -> Dictionary:
 			if winner == "":
 				text = "Ничья: %d : %d" % [sp, se]
 			else:
-				var who := "Ты добежал" if (vs_bot and winner == "p") else \
-					("Враг добежал" if vs_bot else MatchState.seat_name(state, winner) + " добежал")
-				text = "%s до %d! Итог %d : %d" % [who, target, sp, se]
+				text = "%s до %d! Итог %d : %d" % [_cap(_says(state, winner, "добежал", "добежал")),
+					target, sp, se]
 		_:
 			var wp := int(state["players"]["p"]["wins"])
 			var we := int(state["players"]["e"]["wins"])
-			if wp != we:
+			if wp != we and winner != "":
 				var w := maxi(wp, we)
-				var who2 := "Ты взял" if (vs_bot and winner == "p") else \
-					("Враг взял" if vs_bot else MatchState.seat_name(state, winner) + " взял")
-				text = "%s %d %s из 3." % [who2, w, _plural(w, "раунд", "раунда", "раундов")]
+				text = "%s %d %s из 3." % [_cap(_says(state, winner, "взял", "взял")),
+					w, _plural(w, "раунд", "раунда", "раундов")]
 			else:
 				text = "Раунды поделили %d : %d, решили очки за матч: %d : %d" % [wp, we,
 					int(state["players"]["p"]["total"]), int(state["players"]["e"]["total"])]
 	return {"title": title, "text": text}
+
+## Первая буква заглавной. `String.capitalize()` не годится: он поднимает каждое
+## слово — «Ты Добежал».
+func _cap(s: String) -> String:
+	return s.substr(0, 1).to_upper() + s.substr(1) if s != "" else s
 
 ## Согласование числа: 1 куб, 2 куба, 5 кубов.
 func _plural(n: int, one: String, few: String, many: String) -> String:
@@ -1114,6 +1966,13 @@ func _animate_place(cell_idx: int) -> void:
 		if c is DieView:
 			c.play_place()
 
+## Шапка карточки: «ТВОЙ ХОД 3» своему ходу, «СОПЕРНИК · ХОД 3» чужому. В хотсите
+## вместо этого имена сидений.
+func _card_head(seat: String, n: int) -> String:
+	if _solo(state) and seat == _my_view(state):
+		return "ТВОЙ ХОД %d" % n
+	return "%s · ХОД %d" % [_who_name(state, seat), n]
+
 ## Карточка выбранного хода из ленты — без анимации, просто показать.
 func _show_card(record: Dictionary) -> void:
 	for c in card_box.get_children():
@@ -1126,10 +1985,7 @@ func _show_card(record: Dictionary) -> void:
 	var head := HBoxContainer.new()
 	v.add_child(head)
 	var seat := String(record["who"])
-	var who := MatchState.seat_name(state, seat).to_upper()
-	if seat == "p" and MatchState.seat_kind(state, "e") == "bot":
-		who = "ТВОЙ ХОД"
-	var htext := "%s %d" % [who, int(record["n"])] if who == "ТВОЙ ХОД" 		else "%s · ХОД %d" % [who, int(record["n"])]
+	var htext := _card_head(seat, int(record["n"]))
 	head.add_child(_label(htext, 10, Palette.GOLD_LIGHT))
 	head.add_child(_grow())
 	var pts := int(record["pts"])
@@ -1157,10 +2013,7 @@ func _play_card(res: Dictionary) -> void:
 	var head := HBoxContainer.new()
 	v.add_child(head)
 	var seat := String(res["seat"])
-	var who := MatchState.seat_name(state, seat).to_upper()
-	if seat == "p" and MatchState.seat_kind(state, "e") == "bot":
-		who = "ТВОЙ ХОД"
-	var head_text := "%s %d" % [who, state["history"].size()] if who == "ТВОЙ ХОД" 		else "%s · ХОД %d" % [who, state["history"].size()]
+	var head_text := _card_head(seat, state["history"].size())
 	head.add_child(_label(head_text, 10, Palette.GOLD_LIGHT))
 	head.add_child(_grow())
 	var total := _label("", 22, Palette.GOLD_LIGHT, Palette.FONT_UI)
@@ -1223,7 +2076,11 @@ func banner(text: String) -> void:
 
 ## Тактильный отклик. На настольных платформах ничего не делает.
 func buzz(pattern_ms: int) -> void:
-	Input.vibrate_handheld(pattern_ms)
+	# только на телефоне: на Android вызов без разрешения VIBRATE валит процесс
+	# нативным исключением, а на компьютере он просто ни к чему
+	var os_name := OS.get_name()
+	if os_name == "Android" or os_name == "iOS":
+		Input.vibrate_handheld(pattern_ms)
 
 ## Взрыв мины: вспышка клетки и знак поверх неё.
 func _boom(cells: Array) -> void:
@@ -1331,9 +2188,122 @@ func _shot_scenario() -> void:
 			pass
 		"rules":
 			_start_mode("classic")
-			rules_layer.visible = true
+			_show_rules()
 		"lobby":
 			_show_lobby()
+		"durak":
+			# кон в разгаре: на столе отбитая пара и неотбитая атака
+			opponent = "bot"
+			_start_durak()
+			d_state["trump"] = 2
+			d_state["attacker"] = "e"
+			d_state["phase"] = "defend"
+			d_state["max_att"] = 4
+			d_state["table"] = [
+				{"a": {"value": 4, "suit": 1}, "d": {"value": 6, "suit": 1}},
+				{"a": {"value": 4, "suit": 3}, "d": null},
+			]
+			Durak.hand_of(d_state, "p").assign([
+				{"value": 5, "suit": 3}, {"value": 2, "suit": 2},
+				{"value": 1, "suit": 0}, {"value": 6, "suit": 0},
+			])
+			d_state["shown_to"] = "p"
+			d_frozen = []
+			busy = false
+			_d_refresh()
+			await get_tree().process_frame
+		"durak_veil":
+			opponent = "human"
+			_start_durak()
+			d_state["shown_to"] = "e"
+			_show_veil("p")
+			await get_tree().process_frame
+		"durak_rules":
+			opponent = "bot"
+			_start_durak()
+			in_durak = true
+			_show_rules()
+			await get_tree().process_frame
+		"big":
+			# большая доска и карточка с четырьмя жетонами: проверяем, что рука
+			# осталась на экране, а не уехала под нижний край
+			opponent = "bot"
+			_start_mode("big")
+			state["board"][0] = {"v": 2, "type": "basic", "owner": "e", "shield": 0}
+			state["board"][1] = {"v": 3, "type": "basic", "owner": "e", "shield": 0}
+			state["board"][3] = {"v": 4, "type": "basic", "owner": "p", "shield": 0}
+			state["board"][4] = {"v": 4, "type": "basic", "owner": "p", "shield": 0}
+			state["players"]["p"]["hand"][0] = {"value": 4, "type": "jaw"}
+			state["shown_to"] = "p"
+			_refresh()
+			var res_big := MatchState.play(state, "p", 0, 0)
+			_refresh()
+			await _play_card(res_big)
+		"net_client":
+			# глазами не-хоста: его кубы второго сиденья должны быть красными и в
+			# руке, и на доске
+			opponent = "remote"
+			my_seat = "e"
+			_start_mode("classic")
+			state["board"][0] = {"v": 5, "type": "basic", "owner": "e", "shield": 0}
+			state["board"][4] = {"v": 3, "type": "basic", "owner": "p", "shield": 0}
+			state["turn"] = "e"
+			selected = 0
+			_refresh()
+			await get_tree().process_frame
+		"net_round":
+			# исход раунда по сети: раньше выходило «Ты теряет ♥»
+			opponent = "remote"
+			my_seat = "p"
+			_start_mode("classic")
+			state["players"]["p"]["score"] = 12
+			state["players"]["e"]["score"] = 34
+			for seat2 in state["order"]:
+				state["players"][seat2]["moves"] = int(state["cfg"]["moves"])
+			_after_move()
+			await get_tree().process_frame
+		"durak_take":
+			# рука после «Взять»: много кубов, два ряда, крупное уведомление
+			opponent = "bot"
+			_start_durak(4242)
+			var big_hand := []
+			for s in 4:
+				for v in [1, 3, 5]:
+					big_hand.append({"value": v, "suit": s})
+			Durak.hand_of(d_state, "p").assign(big_hand)
+			d_state["trump"] = 1
+			d_state["shown_to"] = "p"
+			d_notice = "ЗАБИРАЕШЬ СТОЛ · +4 куба в руку"
+			busy = false
+			_d_refresh()
+			await get_tree().process_frame
+		"durak_lose":
+			opponent = "bot"
+			_start_durak(1)
+			d_state["over"] = true
+			d_state["phase"] = "over"
+			d_state["outcome"] = {"loser": "p", "detail": "Остался с кубами"}
+			await _d_finish()
+			await get_tree().process_frame
+		"durak_net":
+			# сетевая партия: за вторым сиденьем чужое устройство, ждём его действия
+			opponent = "remote"
+			my_seat = "p"
+			_start_durak(777)
+			d_state["attacker"] = "e"
+			d_state["phase"] = "attack"
+			await _durak_next(0.2)
+			await get_tree().process_frame
+		"durak_bot":
+			# бот атакует, роль уходит игроку: проверяем, что цепочка не залипает
+			opponent = "bot"
+			_start_durak()
+			d_state["attacker"] = "e"
+			d_state["phase"] = "attack"
+			d_state["max_att"] = 6
+			d_state["shown_to"] = "p"
+			await _durak_next(0.2)
+			await get_tree().process_frame
 		"round", "win", "hotseat_round":
 			# доигрываем раунд до исхода, чтобы на кадр попали сами фразы
 			opponent = "human" if _shot_mode == "hotseat_round" else "bot"

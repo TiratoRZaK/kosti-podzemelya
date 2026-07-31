@@ -100,8 +100,79 @@ func run() -> void:
 	check(synced, "после %d ходов состояния совпадают" % moves_done,
 		"хост: %s | клиент: %s" % [_board(host_state), _board(client_state)])
 
+	durak_case()
+
 	client.close()
 	server.close()
+
+## Дуракуб по сети. Действий четыре, и каждое сериализуется тремя значениями:
+## сиденье, что сделал, индекс куба в руке. Гоняем целый кон крест-накрест и
+## сверяем руки, стол, колоду и отбой: разъедутся — игроки увидят разные столы.
+func durak_case() -> void:
+	var host := Durak.new_game(31337, "remote", "p")
+	var client := Durak.new_game(31337, "remote", "e")
+	var deal_ok := _dhand(host, "p") == _dhand(client, "p") \
+		and _dhand(host, "e") == _dhand(client, "e") and int(host["trump"]) == int(client["trump"])
+	check(deal_ok, "дуракуб: из одного сида одна раздача и один козырь",
+		"хост p=[%s] клиент p=[%s] козырь=%s" % [_dhand(host, "p"), _dhand(client, "p"),
+			Durak.SUITS[int(host["trump"])]])
+
+	var acts := 0
+	var guard := 0
+	while not bool(host["over"]) and guard < 400:
+		guard += 1
+		var seat := Durak.actor(host)
+		if seat == "":
+			break
+		# действие выбирает тот, за чьим сиденьем сидят, применяют оба
+		var forced := Durak.forced_action(host, seat)
+		var act := {"act": forced} if forced != "" else Durak.bot_action(host)
+		if act.is_empty():
+			break
+		var idx: int = int(act.get("hand", -1))
+		_dapply(host, seat, String(act["act"]), idx)
+		_dapply(client, seat, String(act["act"]), idx)
+		acts += 1
+
+	var same: bool = _dhand(host, "p") == _dhand(client, "p") \
+		and _dhand(host, "e") == _dhand(client, "e") \
+		and _dtable(host) == _dtable(client) \
+		and host["talon"].size() == client["talon"].size() \
+		and int(host["discard"]) == int(client["discard"]) \
+		and String(host["phase"]) == String(client["phase"]) \
+		and String(host["attacker"]) == String(client["attacker"])
+	check(same and acts > 5, "дуракуб: после %d действий состояния совпадают" % acts,
+		"хост: руки %d:%d колода=%d отбой=%d | клиент: руки %d:%d колода=%d отбой=%d" % [
+			Durak.hand_of(host, "p").size(), Durak.hand_of(host, "e").size(),
+			host["talon"].size(), int(host["discard"]),
+			Durak.hand_of(client, "p").size(), Durak.hand_of(client, "e").size(),
+			client["talon"].size(), int(client["discard"])])
+
+	# чужим сиденьем по сети не походишь: то же правило, что и вживую
+	var h2 := Durak.new_game(555, "remote", "p")
+	var att := String(h2["attacker"])
+	var thief := Durak.attack(h2, Durak.other_seat(h2, att), 0)
+	check(thief.is_empty(), "дуракуб: чужое действие по сети отбрасывается")
+
+func _dapply(st: Dictionary, seat: String, act: String, idx: int) -> void:
+	match act:
+		"attack": Durak.attack(st, seat, idx)
+		"defend": Durak.defend(st, seat, idx)
+		"bito": Durak.bito(st, seat)
+		"take": Durak.take(st, seat)
+
+func _dhand(st: Dictionary, seat: String) -> String:
+	var out := []
+	for d in Durak.hand_of(st, seat):
+		out.append(Durak.die_label(d))
+	return ",".join(out)
+
+func _dtable(st: Dictionary) -> String:
+	var out := []
+	for pair in st["table"]:
+		out.append("%s/%s" % [Durak.die_label(pair["a"]),
+			"—" if pair["d"] == null else Durak.die_label(pair["d"])])
+	return " ".join(out)
 
 func _hand(st: Dictionary, seat: String) -> String:
 	var out := []

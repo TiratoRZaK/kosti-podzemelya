@@ -39,6 +39,15 @@ const MUTED         := Color("8d81a3")
 const FONT_TITLE := "res://assets/fonts/RuslanDisplay-Regular.ttf"
 const FONT_UI    := "res://assets/fonts/Manrope-Bold.ttf"
 
+## Дуракуб: у каждой масти своё лицо куба — цвета те же, что в веб-прототипе.
+## Порядок совпадает с Durak.SUITS: ♠ ♥ ♦ ♣.
+const SUIT_FACE := [
+	{"bg": Color("443c59"), "edge": Color("241d33"), "ink": Color("e9e2f4")},
+	{"bg": Color("962f3f"), "edge": Color("4d1220"), "ink": Color("ffe3da")},
+	{"bg": Color("cf973f"), "edge": Color("7a5116"), "ink": Color("3a2606")},
+	{"bg": Color("447a4e"), "edge": Color("1c3d24"), "ink": Color("e2f4de")},
+]
+
 ## Лицо куба: у игрока костяное, у соперника кровавое.
 static func face(seat_is_player: bool) -> Dictionary:
 	if seat_is_player:
