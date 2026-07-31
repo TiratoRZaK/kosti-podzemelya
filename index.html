@@ -1493,46 +1493,53 @@ function render(){
   $('pHand').className='';
   $('actionbar').innerHTML='';
   var k=S.cfg.kind;
+  /* Вся нижняя зона принадлежит тому, чьими глазами смотрим, верхняя — сопернику.
+     В хотсите зона переезжает вместе с рукой: раньше рука следовала за актором,
+     а подпись, счёт и жизни оставались за 'p', и при ходе Игрока 2 внизу была его
+     красная рука с именем и счётом Игрока 1. */
+  var me=sharedDevice()?S.turn:'p';
+  var foe=other(me);
+  $('whoBottom').textContent=seatName(me);
+  $('whoTop').textContent=seatName(foe);
   if(k==='lives'){
-    $('pHearts').innerHTML=hearts(S.pLives);
-    $('eHearts').innerHTML=hearts(S.eLives);
+    $('pHearts').innerHTML=hearts(pl(me).lives);
+    $('eHearts').innerHTML=hearts(pl(foe).lives);
   }else if(k==='bo3'){
-    $('pHearts').innerHTML=winMarks(S.pWins);
-    $('eHearts').innerHTML=winMarks(S.eWins);
+    $('pHearts').innerHTML=winMarks(pl(me).wins);
+    $('eHearts').innerHTML=winMarks(pl(foe).wins);
   }else{
     $('pHearts').innerHTML=''; $('eHearts').innerHTML='';
   }
+  var myScore=pl(me).score, foeScore=pl(foe).score;
   if(S.cfg.winBy==='count'){
     // раунд берёт тот, чьих кубов на поле больше — крупно кубы, очки мелким
     // (они решают только при равных раундах)
-    // крупно кубы — они решают раунд; красным помечаются только очки, если ушли в минус
-    var pc=ownerCount(S.board,'p'), ec=ownerCount(S.board,'e');
-    $('pScore').innerHTML=pc+'<small'+(S.pScore<0?' class="neg"':'')+'>'+plural(pc,'куб','куба','кубов')+' · '+S.pScore+' очк.</small>';
-    $('eScore').innerHTML=ec+'<small'+(S.eScore<0?' class="neg"':'')+'>'+plural(ec,'куб','куба','кубов')+' · '+S.eScore+' очк.</small>';
+    var pc=ownerCount(S.board,me), ec=ownerCount(S.board,foe);
+    $('pScore').innerHTML=pc+'<small'+(myScore<0?' class="neg"':'')+'>'+plural(pc,'куб','куба','кубов')+' · '+myScore+' очк.</small>';
+    $('eScore').innerHTML=ec+'<small'+(foeScore<0?' class="neg"':'')+'>'+plural(ec,'куб','куба','кубов')+' · '+foeScore+' очк.</small>';
   }else{
-    $('pScore').textContent=k==='race'?S.pScore+'/'+S.cfg.target:S.pScore;
-    $('eScore').textContent=k==='race'?S.eScore+'/'+S.cfg.target:S.eScore;
+    $('pScore').textContent=k==='race'?myScore+'/'+S.cfg.target:myScore;
+    $('eScore').textContent=k==='race'?foeScore+'/'+S.cfg.target:foeScore;
   }
   // в режиме по числу кубов крупная цифра — это кубы, её красить нельзя
   var negOk=(S.cfg.winBy!=='count');
-  $('pScore').className='score pixel'+(negOk&&S.pScore<0?' neg':'');
-  $('eScore').className='score pixel'+(negOk&&S.eScore<0?' neg':'');
-  $('pDeck').textContent='Колода: '+S.pDeck.length;
-  $('eDeck').textContent='Колода: '+S.eDeck.length;
-  $('eHand').innerHTML=S.eHand.map(function(){return'<div class="mini"></div>';}).join('');
+  $('pScore').className='score pixel'+(negOk&&myScore<0?' neg':'');
+  $('eScore').className='score pixel'+(negOk&&foeScore<0?' neg':'');
+  $('pDeck').textContent='Колода: '+pl(me).deck.length;
+  $('eDeck').textContent='Колода: '+pl(foe).deck.length;
+  $('eHand').innerHTML=pl(foe).hand.map(function(){return'<div class="mini"></div>';}).join('');
   var curMoves=Math.min(moves(S.turn)+1,S.cfg.moves);
   var rlabel=(k==='bo3')?('РАУНД '+S.round+'/3'):('РАУНД '+S.round);
   $('turninfo').textContent=rlabel+' · ХОД '+curMoves+'/'+S.cfg.moves;
   var w=$('whose');
   w.textContent=(seatKind(S.turn)==='human'&&!sharedDevice()&&S.turn==='p')
     ? 'ТВОЙ ХОД' : ('ХОД: '+seatName(S.turn).toUpperCase());
-  w.className=S.turn==='p'?'me':'foe';
+  w.className=(S.turn===me)?'me':'foe';
 
-  // чьими глазами смотрим: за одним устройством — тот, чей ход; иначе своё сиденье
-  // (при сетевой игре здесь будет сиденье этого клиента)
-  var actor=sharedDevice()?S.turn:'p';
+  // чьими глазами смотрим на доску — тот же, кому принадлежит нижняя зона
+  var actor=me;
   var canAct=!busy&&!S.veil&&seatIsHuman(S.turn)&&seatLocal(S.turn);
-  var aHand=actor==='p'?S.pHand:S.eHand;
+  var aHand=pl(actor).hand;
   var valid=(sel!==null&&canAct&&aHand[sel])?legalTargets(aHand[sel],actor):[];
   var hint=canAct?findHint(actor):null;
   $('board').innerHTML=S.board.map(function(c,i){
