@@ -32,9 +32,13 @@ const GAME_PORT := 8177
 const DISCOVERY_PORT := 8178
 const DISCOVERY_MAGIC := "kosti-podzemelya-v1"
 
+const ANNOUNCE_EVERY := 0.8        # как часто хост объявляет о себе
+
 var is_host := false
 var connected := false
 var player_name := "Игрок"
+var discovery_ok := true           # удалось ли занять порт обнаружения
+var _announce_wait := 0.0
 
 var _peer: ENetMultiplayerPeer
 var _udp: PacketPeerUDP
@@ -59,29 +63,86 @@ func start_host(name_of_player: String) -> bool:
 		return false
 	multiplayer.multiplayer_peer = _peer
 	is_host = true
-	# слушаем широковещательные запросы, чтобы второй телефон нас нашёл
+	# Слушаем запросы «кто здесь хост». Ошибку bind раньше не проверяли: порт мог
+	# быть занят, хост поднимался, а найти его было нельзя — и понять, почему,
+	# тоже нельзя.
 	_udp = PacketPeerUDP.new()
-	_udp.bind(DISCOVERY_PORT)
+	_udp.set_broadcast_enabled(true)
+	discovery_ok = _udp.bind(DISCOVERY_PORT) == OK
+	if not discovery_ok:
+		push_warning("Порт обнаружения занят: %d" % DISCOVERY_PORT)
 	set_process(true)
 	return true
 
 # ------------------------------------------------------------------ клиент
 
 ## Разослать запрос «кто здесь хост». Ответы придут в hosts_found.
+##
+## Широковещательному запросу доверять нельзя: Android в целях экономии батареи
+## отбрасывает входящие broadcast-пакеты на Wi-Fi, да и роутеры их иногда не
+## пересылают. Из-за этого выходило несимметрично — тот, кто *создавал* игру, не
+## находился, а сам находил других: клиент рассылает broadcast и получает
+## обычный ответ, а обычные пакеты не фильтруются никогда.
+##
+## Поэтому кроме broadcast мы обходим подсеть **поимённо**: посылаем запрос на
+## каждый адрес /24. Это 254 крошечных пакета, уходят за один кадр, и до хоста
+## доходят гарантированно.
 func discover() -> void:
 	_found.clear()
 	_discovering = true
 	var udp := PacketPeerUDP.new()
 	udp.set_broadcast_enabled(true)
-	udp.bind(0)
-	udp.set_dest_address("255.255.255.255", DISCOVERY_PORT)
-	udp.put_packet(("%s?" % DISCOVERY_MAGIC).to_utf8_buffer())
+	# слушаем и порт обнаружения — на случай, если хост объявит себя сам
+	if udp.bind(DISCOVERY_PORT) != OK:
+		udp.bind(0)
 	_udp = udp
 	set_process(true)
+	var ask := ("%s?" % DISCOVERY_MAGIC).to_utf8_buffer()
+	for addr in _broadcast_targets():
+		udp.set_dest_address(addr, DISCOVERY_PORT)
+		udp.put_packet(ask)
+	for addr in _subnet_targets():
+		udp.set_dest_address(addr, DISCOVERY_PORT)
+		udp.put_packet(ask)
 	# ждём ответы недолго: игра идёт в одной комнате, задержки мизерные
-	await get_tree().create_timer(1.2).timeout
+	await get_tree().create_timer(1.5).timeout
 	_discovering = false
 	hosts_found.emit(_found.duplicate())
+
+## Свои адреса в локальной сети: IPv4, без петли и самоназначенных.
+static func local_ipv4() -> Array:
+	var out := []
+	for a in IP.get_local_addresses():
+		var s := String(a)
+		if s.contains(":") or s.begins_with("127.") or s.begins_with("169.254."):
+			continue
+		out.append(s)
+	return out
+
+## Куда шлём широковещательный запрос: общий адрес и адрес своей подсети.
+## Второй иногда доходит там, где первый режется.
+func _broadcast_targets() -> Array:
+	var out := ["255.255.255.255"]
+	for ip in local_ipv4():
+		var parts: PackedStringArray = ip.split(".")
+		if parts.size() == 4:
+			out.append("%s.%s.%s.255" % [parts[0], parts[1], parts[2]])
+	return out
+
+## Все адреса своей подсети, кроме собственного: обычные пакеты Android не
+## фильтрует, поэтому такой обход находит хост даже когда broadcast не работает.
+func _subnet_targets() -> Array:
+	var out := []
+	for ip in local_ipv4():
+		var parts: PackedStringArray = ip.split(".")
+		if parts.size() != 4:
+			continue
+		var prefix := "%s.%s.%s." % [parts[0], parts[1], parts[2]]
+		var mine := int(parts[3])
+		for i in range(1, 255):
+			if i != mine:
+				out.append(prefix + str(i))
+	return out
 
 func join(address: String) -> bool:
 	stop()
@@ -108,9 +169,19 @@ func stop() -> void:
 
 # --------------------------------------------------------------- обнаружение
 
-func _process(_dt: float) -> void:
+func _process(dt: float) -> void:
 	if _udp == null:
 		return
+	# Хост объявляет себя сам, не дожидаясь запроса: если broadcast до него не
+	# доходит, зато уходит от него — второй телефон всё равно узнает об игре.
+	if is_host and not connected:
+		_announce_wait -= dt
+		if _announce_wait <= 0.0:
+			_announce_wait = ANNOUNCE_EVERY
+			var hi := ("%s!%s" % [DISCOVERY_MAGIC, player_name]).to_utf8_buffer()
+			for addr in _broadcast_targets():
+				_udp.set_dest_address(addr, DISCOVERY_PORT)
+				_udp.put_packet(hi)
 	while _udp.get_available_packet_count() > 0:
 		var data := _udp.get_packet().get_string_from_utf8()
 		var from_ip := _udp.get_packet_ip()

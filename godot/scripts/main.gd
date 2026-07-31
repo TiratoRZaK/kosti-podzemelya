@@ -59,6 +59,12 @@ var banner_panel: PanelContainer
 var _shot_path := ""
 var _shot_mode := ""
 var _wall_rect: TextureRect          # фон ждёт фоновой загрузки, см. _process
+var durak_root: Control
+var _safe := Vector4(14, 14, 14, 14)   # отступы экрана: лево, верх, право, низ
+var card_scroll: ScrollContainer
+var boot_note: Label
+var _boot_ms := 0
+var hand_px := HAND_PX
 
 # Дуракуб: своя машина состояний (Durak) и свой экран. Боевая раскладка ему не
 # годится — нет ни очков, ни жизней, ни истории ходов, зато есть стол из пар.
@@ -97,13 +103,73 @@ var name_cancel: Button
 func _ready() -> void:
 	_parse_args()
 	rng.seed = 20260731
+	_boot_ms = Time.get_ticks_msec()      # столько прошло от инициализации движка
 	_build_ui()
+	_apply_safe_area()
+	get_viewport().size_changed.connect(_apply_safe_area)
 	_show_menu()
+	_report_boot()
 	# имя спрашиваем один раз за установку; снимки экранов этим не тормозим
 	if _shot_path == "" and not Profile.has_name():
 		_show_name_screen(true)
 	if _shot_path != "":
 		await _shot_scenario()
+
+## Замер запуска: сколько ушло на движок до нашего кода и сколько на интерфейс.
+func _report_boot() -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if boot_note == null:
+		return
+	var ui := Time.get_ticks_msec() - _boot_ms
+	boot_note.text = "запуск: движок %d мс · интерфейс %d мс" % [_boot_ms, ui]
+
+## Отступы по безопасной зоне устройства. У телефона снизу жестовая полоса или
+## кнопки навигации, сверху вырез — без этого нижняя часть экрана (рука и кнопки)
+## уезжала под системную панель, особенно на большой доске, где всё и так плотно.
+## В вебе ту же задачу решает env(safe-area-inset-*).
+func _apply_safe_area() -> void:
+	var win := DisplayServer.window_get_size()
+	var vp := get_viewport_rect().size
+	var pad := 14.0
+	var l := pad
+	var t := pad
+	var r := pad
+	var b := pad
+	if win.x > 0 and win.y > 0:
+		var area := DisplayServer.get_display_safe_area()
+		# безопасная зона приходит в пикселях устройства, а рисуем мы в логических
+		var kx := vp.x / float(win.x)
+		var ky := vp.y / float(win.y)
+		if area.size.x > 0 and area.size.y > 0 and (area.size.x < win.x or area.size.y < win.y
+				or area.position.x > 0 or area.position.y > 0):
+			l = maxf(pad, area.position.x * kx)
+			t = maxf(pad, area.position.y * ky)
+			r = maxf(pad, (win.x - area.position.x - area.size.x) * kx)
+			b = maxf(pad, (win.y - area.position.y - area.size.y) * ky)
+	# На телефоне поверх игры рисуется жестовая полоса, а в полноэкранном режиме
+	# система отдаёт «безопасной зоной» весь экран — на неё одну надеяться нельзя,
+	# поэтому снизу держим отступ в любом случае.
+	if OS.get_name() == "Android" or OS.get_name() == "iOS":
+		b = maxf(b, 26.0)
+		t = maxf(t, 18.0)
+	_safe = Vector4(l, t, r, b)
+	# на невысоких экранах ужимаем карточку хода и руку, иначе низ не влезает
+	var avail := vp.y - t - b
+	var compact: bool = avail < 800.0
+	hand_px = 62 if compact else HAND_PX
+	if hand_row != null:
+		hand_row.custom_minimum_size.y = hand_px
+	if card_scroll != null:
+		card_scroll.custom_minimum_size.y = 92 if compact else 116
+	for box in [battle_root, durak_root]:
+		if box == null:
+			continue
+		box.add_theme_constant_override("margin_left", int(l))
+		box.add_theme_constant_override("margin_top", int(t))
+		box.add_theme_constant_override("margin_right", int(r))
+		box.add_theme_constant_override("margin_bottom", int(b))
+	_refresh_screen()
 
 ## Фон подставляем, когда фоновый поток его дочитает. Пока не готов — на экране
 ## заливка, и меню уже нажимается: запуск не ждёт декода текстуры.
@@ -159,6 +225,8 @@ func _parse_args() -> void:
 			_shot_mode = "durak_lose"
 		elif a == "--shot-shield":
 			_shot_mode = "shield"
+		elif a == "--shot-fx":
+			_shot_mode = "fx"
 		elif a == "--shot-name":
 			_shot_mode = "name_ask"
 		elif a == "--shot-modes":
@@ -223,8 +291,6 @@ func _build_ui() -> void:
 
 	var pad := MarginContainer.new()
 	pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	for side in ["left", "right", "top", "bottom"]:
-		pad.add_theme_constant_override("margin_" + side, 14)
 	add_child(pad)
 	battle_root = pad
 	var root := VBoxContainer.new()
@@ -267,7 +333,7 @@ func _build_ui() -> void:
 	# карточки, а рука остаётся на месте.
 	card_box = VBoxContainer.new()
 	card_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var card_scroll := ScrollContainer.new()
+	card_scroll = ScrollContainer.new()
 	card_scroll.custom_minimum_size.y = 116
 	card_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -407,8 +473,7 @@ func _build_durak() -> Control:
 	layer.visible = false
 	var pad := MarginContainer.new()
 	pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	for side in ["left", "right", "top", "bottom"]:
-		pad.add_theme_constant_override("margin_" + side, 14)
+	durak_root = pad
 	layer.add_child(pad)
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 10)
@@ -641,8 +706,8 @@ func _d_rebuild_table(table: Array, trump: int) -> void:
 		c.queue_free()
 	# место в 1.12 высоты, поэтому по высоте считаем с этим коэффициентом; 470 —
 	# всё остальное на экране Дуракуба, включая руку в два ряда
-	var by_width: float = (390.0 - 28.0 - CELL_GAP * 2) / 3.0
-	var by_height: float = (get_viewport_rect().size.y - 470.0 - CELL_GAP) / 2.0 / 1.12
+	var by_width: float = (390.0 - _safe.x - _safe.z - CELL_GAP * 2) / 3.0
+	var by_height: float = (get_viewport_rect().size.y - _safe.y - _safe.w - 442.0 - CELL_GAP) / 2.0 / 1.12
 	var cell_w: float = maxf(minf(by_width, by_height), 60.0)
 	# 0.58 — чтобы защитный куб перекрывал атакующий только углом: при 0.66 он
 	# налезал на само значение, и было не разобрать, чем атаковали
@@ -1090,6 +1155,12 @@ func _build_menu() -> Control:
 	var name_btn := _button("Сменить имя", true)
 	name_btn.pressed.connect(func(): _show_name_screen(false))
 	kind_box.add_child(name_btn)
+	# Замер запуска. Нужен, чтобы не гадать: если «движок» большой, время уходит
+	# до нашего кода — на распаковку библиотеки и проверки системы, и лечится это
+	# сборкой, а не игрой.
+	boot_note = _label("", 9, Palette.MUTED)
+	boot_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	kind_box.add_child(boot_note)
 	var quit_btn := _button("Выход", true)
 	quit_btn.pressed.connect(func(): get_tree().quit())
 	kind_box.add_child(quit_btn)
@@ -1362,12 +1433,91 @@ func _lan_host() -> void:
 		return
 	my_seat = "p"
 	opponent = "remote"
-	_lobby_message("Ждём соперника…\nПусть он нажмёт «Найти игру».\n\nТебя найдут как: %s" % Profile.display_name())
+	var ips: Array = Lan.local_ipv4()
+	var addr: String = String(ips[0]) if not ips.is_empty() else "адрес не определён"
+	var text := "Ждём соперника…\nПусть он нажмёт «Найти игру».\n\nТебя найдут как: %s\nАдрес: %s" % [
+		Profile.display_name(), addr]
+	if not lan.discovery_ok:
+		# порт обнаружения занят: сама игра поднялась, но найти её не смогут
+		text += "\n\nПоиск занят другой копией игры — соперник тебя не найдёт, пусть введёт адрес вручную."
+	_lobby_message(text)
 
 func _lan_find() -> void:
 	_ensure_lan()
 	_lobby_message("Ищем игру в сети…", false)
 	lan.discover()
+
+## Не нашли. Даём и повтор поиска, и ввод адреса руками: обнаружение зависит от
+## того, пропускает ли сеть широковещательные пакеты, а прямое подключение по
+## адресу работает всегда.
+func _lobby_not_found() -> void:
+	for c in lobby_box.get_children():
+		c.queue_free()
+	var t := _label("ИГРУ НЕ НАШЛИ", 18, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(t)
+	var m := _label("Проверь, что оба телефона в одной сети Wi-Fi и соперник нажал «Создать игру». Если не находит — попроси у него адрес, он написан у него на экране.", 12, Palette.TEXT)
+	m.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	m.custom_minimum_size.x = 290
+	m.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(m)
+	var again := _button("Искать снова")
+	again.pressed.connect(_lan_find)
+	lobby_box.add_child(again)
+	var manual := _button("Ввести адрес")
+	manual.pressed.connect(_lobby_manual)
+	lobby_box.add_child(manual)
+	var back := _button("Назад", true)
+	back.pressed.connect(func():
+		if lan != null:
+			lan.stop()
+		_lobby_idle()
+	)
+	lobby_box.add_child(back)
+
+## Ввод адреса вручную — гарантированный путь, когда обнаружение не работает.
+func _lobby_manual() -> void:
+	for c in lobby_box.get_children():
+		c.queue_free()
+	var t := _label("АДРЕС СОПЕРНИКА", 18, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(t)
+	var m := _label("Адрес показан на экране того, кто создал игру.", 11, Palette.MUTED)
+	m.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	m.custom_minimum_size.x = 290
+	m.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(m)
+	var field := LineEdit.new()
+	field.placeholder_text = "192.168.1.42"
+	field.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	field.custom_minimum_size.y = 44
+	field.add_theme_font_size_override("font_size", 16)
+	# подсказываем свою подсеть: у соперника адрес почти наверняка из неё же
+	var mine: Array = Lan.local_ipv4()
+	if not mine.is_empty():
+		var parts: PackedStringArray = String(mine[0]).split(".")
+		if parts.size() == 4:
+			field.text = "%s.%s.%s." % [parts[0], parts[1], parts[2]]
+			field.caret_column = field.text.length()
+	lobby_box.add_child(field)
+	var go := _button("Подключиться")
+	var try_join := func():
+		var addr := field.text.strip_edges()
+		if addr == "" or not addr.contains("."):
+			_lobby_message("Адрес непохож на адрес. Он выглядит так: 192.168.1.42")
+			return
+		my_seat = "e"
+		opponent = "remote"
+		if not lan.join(addr):
+			_lobby_message("Не удалось подключиться к %s. Проверь адрес и что игра создана." % addr)
+		else:
+			_lobby_message("Подключаемся к %s…" % addr, false)
+	go.pressed.connect(try_join)
+	field.text_submitted.connect(func(_t: String): try_join.call())
+	lobby_box.add_child(go)
+	var back := _button("Назад", true)
+	back.pressed.connect(_lobby_not_found)
+	lobby_box.add_child(back)
 
 func _ensure_lan() -> void:
 	if lan != null:
@@ -1385,7 +1535,7 @@ func _ensure_lan() -> void:
 
 func _on_lan_hosts(list: Array) -> void:
 	if list.is_empty():
-		_lobby_message("Игру не нашли. Проверь, что оба устройства в одной сети Wi-Fi и соперник нажал «Создать игру».")
+		_lobby_not_found()
 		return
 	for c in lobby_box.get_children():
 		c.queue_free()
@@ -1743,9 +1893,12 @@ func _show_result(title: String, detail: String, button: String, on_press: Calla
 			on_press.call()
 		)
 		box.add_child(b)
-	var m := _button("В меню", true)
-	m.pressed.connect(_show_menu)
-	box.add_child(m)
+	# вторая кнопка не нужна, когда основная и так ведёт в меню: при обрыве связи
+	# получалось два одинаковых «В меню» подряд
+	if button != "В меню":
+		var m := _button("В меню", true)
+		m.pressed.connect(_show_menu)
+		box.add_child(m)
 	over_layer.visible = true
 
 # ------------------------------------------------------------- отображение
@@ -1896,10 +2049,11 @@ func _rebuild_board(me: String) -> void:
 ## перестаёт уезжать под край экрана.
 func _cell_size(cols: int, cells: int) -> float:
 	var rows: int = ceili(float(cells) / float(cols))
-	var by_width: float = (390.0 - 28.0 - CELL_GAP * (cols - 1)) / float(cols)
-	var budget: float = get_viewport_rect().size.y - 582.0
+	var by_width: float = (390.0 - _safe.x - _safe.z - CELL_GAP * (cols - 1)) / float(cols)
+	# из высоты вычитаем и безопасную зону: под системной панелью рисовать нельзя
+	var budget: float = get_viewport_rect().size.y - _safe.y - _safe.w - 554.0
 	var by_height: float = (budget - CELL_GAP * (rows - 1)) / float(rows)
-	return maxf(minf(by_width, by_height), 56.0)
+	return maxf(minf(by_width, by_height), 52.0)
 
 func _rebuild_hand(me: String) -> void:
 	for c in hand_row.get_children():
@@ -1909,7 +2063,7 @@ func _rebuild_hand(me: String) -> void:
 	for i in hand.size():
 		var die: Dictionary = hand[i]
 		var d := DieView.new()
-		d.custom_minimum_size = Vector2(HAND_PX, HAND_PX)
+		d.custom_minimum_size = Vector2(hand_px, hand_px)
 		d.clickable = can
 		# в своей руке владелец видит всё, включая ловушки
 		d.setup(int(die["value"]), String(die["type"]), me == "p", true)
@@ -1980,9 +2134,14 @@ func _do_move(seat: String, hand_idx: int, cell_idx: int, broadcast: bool = true
 	if bool(res["mined"]):
 		_boom(res["boom"])
 		toast("Мина! Ход сгорел", seat != viewer())
+	else:
+		_play_effects(res)     # шипы, колдун, челюсть, дружелюбный
 	var combo: Dictionary = res["combo"]
 	if not combo.is_empty() and int(combo["bonus"]) >= 25:
 		_combo_flash()
+		_shake(4.0, 0.2)
+		_float_text(int(res["cell"]), String(combo["name"]).replace("!", "") + "!",
+			Palette.GOLD_LIGHT, 24)
 	await _play_card(res)
 	_after_move()
 
@@ -2001,6 +2160,7 @@ func _after_move() -> void:
 				return
 			busy = true
 			var rp := _round_phrases(String(out["winner"]), String(out["detail"]))
+			await _round_fanfare(String(out["winner"]))
 			_show_result(String(rp["title"]), String(rp["text"]), "Следующий раунд", func():
 				if opponent == "remote" and lan != null and lan.connected:
 					lan.send_next_round()
@@ -2050,6 +2210,26 @@ func _who_name(st: Dictionary, seat: String) -> String:
 	if _solo(st):
 		return "ТЫ" if seat == _my_view(st) else "СОПЕРНИК"
 	return MatchState.seat_name(st, seat).to_upper()
+
+## Исход раунда до появления окна: свой раунд — золотая вспышка и баннер, чужой —
+## красная и тряска. Раньше раунд просто заканчивался диалогом, и было непонятно,
+## случилось хорошее или плохое.
+func _round_fanfare(winner: String) -> void:
+	var mine := _my_view(state)
+	if winner == "":
+		banner("НИЧЬЯ В РАУНДЕ")
+		_flash_screen(Color(0.6, 0.6, 0.7, 0.22), 0.35)
+	elif winner == mine:
+		buzz(70)
+		banner("РАУНД ТВОЙ!" if _solo(state) else MatchState.seat_name(state, winner).to_upper() + "!")
+		_flash_screen(Color(1, 0.82, 0.35, 0.3), 0.45)
+	else:
+		buzz(160)
+		banner("РАУНД ЗА СОПЕРНИКОМ" if _solo(state) else MatchState.seat_name(state, winner).to_upper() + "!")
+		_flash_screen(Color(0.9, 0.2, 0.2, 0.32), 0.45)
+		_shake(10.0, 0.4)
+	# окно исхода ждёт, пока баннер отыграет: иначе он ляжет поверх кнопок
+	await get_tree().create_timer(1.1).timeout
 
 ## Фразы исхода раунда: всегда говорим, что именно произошло, а не только счёт.
 func _round_phrases(winner: String, detail: String) -> Dictionary:
@@ -2224,7 +2404,15 @@ func _play_card(res: Dictionary) -> void:
 	total.text = "💥 0" if bool(res["mined"]) else str(absi(pts))
 	total.add_theme_color_override("font_color", Palette.NEG if pts < 0 else Palette.GOLD_LIGHT)
 	await get_tree().create_timer(0.1).timeout
-	_pop_in(total, 1.3)
+	_pop_in(total, 1.45)
+	# крупный итог хода — главное число карточки, поэтому он ещё и светится
+	var glow := total.get_theme_color("font_color")
+	var tw2 := create_tween()
+	tw2.tween_property(total, "modulate", Color(1.6, 1.5, 1.2), 0.12)
+	tw2.tween_property(total, "modulate", Color.WHITE, 0.3)
+	if absi(pts) >= 40:
+		buzz(50)
+		_shake(3.0, 0.18)
 
 ## Короткое сообщение под зоной соперника: пас, взрыв, исход кона.
 func toast(text: String, foe: bool = false) -> void:
@@ -2256,7 +2444,15 @@ func buzz(pattern_ms: int) -> void:
 
 ## Взрыв мины: вспышка клетки и знак поверх неё.
 func _boom(cells: Array) -> void:
-	buzz(180)
+	await get_tree().process_frame
+	buzz(220)
+	# взрыв должен быть событием, а не тихим исчезновением куба: вспышка на весь
+	# экран, тряска, осколки и кольцо от каждой воронки
+	_flash_screen(Color(1, 0.55, 0.2, 0.5), 0.4)
+	_shake(12.0, 0.45)
+	for ci2 in cells:
+		_ring(int(ci2), Color(1, 0.66, 0.24), 3.0, 0.55)
+		_shards(int(ci2), Color(1, 0.6, 0.25), 12)
 	for ci in cells:
 		var idx := int(ci)
 		if idx < 0 or idx >= board_grid.get_child_count():
@@ -2282,6 +2478,152 @@ func _boom(cells: Array) -> void:
 			tw2.tween_property(mark, "global_position:y", mark.global_position.y - 40.0, 0.9)
 			tw2.parallel().tween_property(mark, "modulate:a", 0.0, 0.9)
 			tw2.tween_callback(mark.queue_free)
+
+# ------------------------------------------------------------------ эффекты
+#
+# Способности раньше были заметны только надписью в карточке хода: куб тихо
+# исчезал, и «за что минус десять» игрок не понимал. Поэтому у каждого события
+# теперь свой знак на самой доске — кольцо, тряска, всплывающее число.
+
+## Центр клетки в координатах экрана — от него отталкиваются все эффекты.
+func _cell_center(idx: int) -> Vector2:
+	if idx < 0 or idx >= board_grid.get_child_count():
+		return get_viewport_rect().size * 0.5
+	var slot: Control = board_grid.get_child(idx)
+	return slot.global_position + slot.size * 0.5
+
+## Тряска экрана. Дёргаем корневой контейнер, а не камеру: интерфейс её не знает.
+func _shake(power: float = 7.0, time: float = 0.28) -> void:
+	var box: Control = durak_root if in_durak else battle_root
+	if box == null:
+		return
+	var home := box.position
+	var tw := create_tween()
+	var steps := 6
+	for i in steps:
+		var k := 1.0 - float(i) / float(steps)
+		var off := Vector2(rng.randf_range(-power, power), rng.randf_range(-power, power)) * k
+		tw.tween_property(box, "position", home + off, time / float(steps))
+	tw.tween_property(box, "position", home, time / float(steps))
+
+## Короткая вспышка на весь экран — для взрыва и крупных событий.
+func _flash_screen(col: Color, time: float = 0.3) -> void:
+	var f := ColorRect.new()
+	f.color = col
+	f.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	f.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	f.z_index = 130
+	add_child(f)
+	var tw := create_tween()
+	tw.tween_property(f, "color", Color(col.r, col.g, col.b, 0.0), time)
+	tw.tween_callback(f.queue_free)
+
+## Расширяющееся кольцо из клетки: «здесь что-то произошло».
+func _ring(idx: int, col: Color, to_scale: float = 2.4, time: float = 0.45) -> void:
+	await get_tree().process_frame
+	var start := 46.0
+	var ring := Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0, 0, 0, 0)
+	sb.border_color = col
+	sb.set_border_width_all(4)
+	sb.set_corner_radius_all(int(start * 0.5))
+	ring.add_theme_stylebox_override("panel", sb)
+	ring.custom_minimum_size = Vector2(start, start)
+	ring.size = Vector2(start, start)
+	ring.pivot_offset = Vector2(start, start) * 0.5
+	ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ring.z_index = 120
+	add_child(ring)
+	ring.global_position = _cell_center(idx) - Vector2(start, start) * 0.5
+	var tw := create_tween().set_parallel(true)
+	tw.tween_property(ring, "scale", Vector2(to_scale, to_scale), time).set_ease(Tween.EASE_OUT)
+	tw.tween_property(ring, "modulate:a", 0.0, time)
+	tw.chain().tween_callback(ring.queue_free)
+
+## Всплывающая надпись над клеткой: значок способности и число.
+func _float_text(idx: int, text: String, col: Color, size_px: int = 26) -> void:
+	var box := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.02, 0.07, 0.82)
+	sb.set_corner_radius_all(9)
+	sb.border_color = Color(col.r, col.g, col.b, 0.55)
+	sb.set_border_width_all(1)
+	sb.content_margin_left = 9
+	sb.content_margin_right = 9
+	sb.content_margin_top = 2
+	sb.content_margin_bottom = 2
+	box.add_theme_stylebox_override("panel", sb)
+	box.z_index = 125
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(_label(text, size_px, col, Palette.FONT_UI))
+	add_child(box)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# ставим над клеткой, а не по центру: иначе надпись ложится на цифру куба
+	box.global_position = _cell_center(idx) - Vector2(box.size.x * 0.5, box.size.y + 6.0)
+	box.pivot_offset = box.size * 0.5
+	box.scale = Vector2(0.6, 0.6)
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(box, "scale", Vector2(1.1, 1.1), 0.16).set_ease(Tween.EASE_OUT)
+	tw.tween_property(box, "global_position:y", box.global_position.y - 52.0, 0.9)
+	tw.chain().tween_property(box, "modulate:a", 0.0, 0.32)
+	tw.chain().tween_callback(box.queue_free)
+
+## Осколки: разлетаются от клетки. Взрыв мины без них читался как простое
+## исчезновение куба.
+func _shards(idx: int, col: Color, count: int = 10) -> void:
+	await get_tree().process_frame
+	var from := _cell_center(idx)
+	for i in count:
+		var p := ColorRect.new()
+		var s := rng.randf_range(5.0, 11.0)
+		p.color = col
+		p.custom_minimum_size = Vector2(s, s)
+		p.size = Vector2(s, s)
+		p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		p.z_index = 124
+		add_child(p)
+		p.global_position = from
+		var dir := Vector2(rng.randf_range(-1.0, 1.0), rng.randf_range(-1.0, -0.2)).normalized()
+		var dist := rng.randf_range(60.0, 130.0)
+		var tw := create_tween().set_parallel(true)
+		tw.tween_property(p, "global_position", from + dir * dist + Vector2(0, 40), 0.6)
+		tw.tween_property(p, "modulate:a", 0.0, 0.6)
+		tw.tween_property(p, "rotation", rng.randf_range(-3.0, 3.0), 0.6)
+		tw.chain().tween_callback(p.queue_free)
+
+## Разбор жетонов хода: у каждой способности свой знак на доске. Определяем по
+## значку жетона — он уже приходит из логики и однозначен.
+func _play_effects(res: Dictionary) -> void:
+	await get_tree().process_frame
+	var cell := int(res["cell"])
+	for p in res["parts"]:
+		var icon := String(p.get("icon", ""))
+		match icon:
+			"🦔":
+				# укол шипами: красное кольцо, тряска и крупный минус
+				buzz(90)
+				_ring(cell, Palette.DANGER, 2.6, 0.5)
+				_shake(8.0, 0.3)
+				_float_text(cell, "−%d" % int(p["v"]), Palette.NEG, 30)
+			"🔮":
+				# превращение колдуна: волна и новое значение
+				buzz(40)
+				_ring(cell, Palette.CYAN, 2.2, 0.5)
+				_float_text(cell, "🔮 %d" % int(p["v"]), Palette.CYAN, 26)
+			"🦷":
+				# челюсть доедает соседа справа: знак над съеденной клеткой
+				buzz(60)
+				var eaten: int = cell + 1
+				_ring(eaten, Palette.GOLD_LIGHT, 2.0, 0.4)
+				_shards(eaten, Palette.BLOOD_HI, 8)
+				_float_text(eaten, "🦷 +%d" % int(p["v"]), Palette.GOLD_LIGHT, 26)
+				_shake(5.0, 0.2)
+			"🤝":
+				_ring(cell, Palette.GOLD, 1.8, 0.4)
+				_float_text(cell, "🤝 +%d" % int(p["v"]), Palette.GOLD_LIGHT, 24)
 
 ## Вспышка всей доски: комбо от фулл-хауса и выше.
 func _combo_flash() -> void:
@@ -2334,17 +2676,33 @@ func _fly_number(part: Dictionary, chip: Control, seat: String) -> void:
 		src = slot.global_position + slot.size * 0.5
 	var neg: bool = bool(part.get("neg", false))
 	var col := Palette.NEG if (neg or seat == "e") else Palette.GOLD_LIGHT
-	var fly := _label("%s%d" % ["−" if neg else "+", int(part["v"])], 17, col, Palette.FONT_UI)
-	add_child(fly)
-	fly.global_position = src
+	# число крупное и с замахом: сперва подскакивает над клеткой, потом летит в
+	# свой жетон. Мелкая цифра, тихо уезжавшая вниз, читалась как случайный мусор.
+	var fly := _label("%s%d" % ["−" if neg else "+", int(part["v"])], 24, col, Palette.FONT_UI)
 	fly.z_index = 100
-	var dst: Vector2 = chip.global_position + chip.size * 0.5
+	fly.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(fly)
+	await get_tree().process_frame
+	fly.global_position = src - fly.size * 0.5
+	fly.pivot_offset = fly.size * 0.5
+	fly.scale = Vector2(0.5, 0.5)
+	var dst: Vector2 = chip.global_position + chip.size * 0.5 - fly.size * 0.5
+	var jump := fly.global_position + Vector2(0, -26)
+	var up := create_tween().set_parallel(true)
+	up.tween_property(fly, "scale", Vector2(1.25, 1.25), 0.16).set_ease(Tween.EASE_OUT)
+	up.tween_property(fly, "global_position", jump, 0.16).set_ease(Tween.EASE_OUT)
+	await up.finished
 	var tw := create_tween().set_parallel(true)
-	tw.tween_property(fly, "global_position", dst, 0.32).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
-	tw.tween_property(fly, "scale", Vector2(0.7, 0.7), 0.32)
-	tw.tween_property(fly, "modulate:a", 0.15, 0.32)
+	tw.tween_property(fly, "global_position", dst, 0.34).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_CUBIC)
+	tw.tween_property(fly, "scale", Vector2(0.65, 0.65), 0.34)
+	tw.tween_property(fly, "modulate:a", 0.2, 0.34)
 	await tw.finished
 	fly.queue_free()
+	# удар по жетону: он вспыхивает от прилетевшего числа
+	chip.pivot_offset = chip.size * 0.5
+	var hit := create_tween()
+	hit.tween_property(chip, "scale", Vector2(1.18, 1.18), 0.08).set_ease(Tween.EASE_OUT)
+	hit.tween_property(chip, "scale", Vector2.ONE, 0.12)
 
 func _pop_in(node: Control, overshoot: float = 1.12) -> void:
 	node.modulate.a = 1.0
@@ -2419,6 +2777,22 @@ func _shot_scenario() -> void:
 			# второй шаг меню: выбор режима после выбора вида игры
 			_show_modes()
 			await get_tree().process_frame
+		"fx":
+			# челюсть жуёт куб с шипами: за один ход и укол, и «пережевал» — видно
+			# сразу оба новых знака на доске
+			opponent = "bot"
+			_start_mode("classic")
+			state["board"][1] = {"v": 3, "type": "spikes", "owner": "e", "shield": 0}
+			state["board"][3] = {"v": 5, "type": "basic", "owner": "p", "shield": 0}
+			state["board"][4] = {"v": 5, "type": "basic", "owner": "p", "shield": 0}
+			state["players"]["p"]["hand"][0] = {"value": 5, "type": "jaw"}
+			state["shown_to"] = "p"
+			_refresh()
+			var res_fx := MatchState.play(state, "p", 0, 0)
+			_refresh()
+			_animate_place(int(res_fx["placed"]))
+			_play_effects(res_fx)
+			await get_tree().create_timer(0.35).timeout
 		"shield":
 			# щиты крупно и мелко: обводка обязана идти по краю всего куба, включая
 			# нижнюю фаску, иначе она читается как «рамка не по размеру»
