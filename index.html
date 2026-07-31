@@ -139,11 +139,15 @@ body{
 @keyframes bann{0%{opacity:0; transform:translate(-50%,-50%) scale(.6);} 20%{opacity:1; transform:translate(-50%,-50%) scale(1.15);} 40%{transform:translate(-50%,-50%) scale(1);} 80%{opacity:1;} 100%{opacity:0;}}
 
 /* ---------- overlays ---------- */
-#overlay,#rules,#menu,#draftOv{
+#overlay,#rules,#menu,#draftOv,#veil{
   position:fixed; inset:0; background:rgba(8,5,14,.9); z-index:50;
   display:none; align-items:center; justify-content:center; padding:16px;
 }
-#overlay.show,#rules.show,#menu.show,#draftOv.show{display:flex;}
+#overlay.show,#rules.show,#menu.show,#draftOv.show,#veil.show{display:flex;}
+/* ширма плотная: сквозь неё не должно просвечивать поле с чужими ловушками */
+#veil{background:#0b0713;}
+#veilIcon{font-size:44px; margin-bottom:10px;}
+#veil p{color:var(--muted); font-size:13px;}
 .panel{
   background:var(--panel2); border:3px solid var(--cell-br); border-radius:16px;
   padding:22px 18px; max-width:380px; width:100%; text-align:center;
@@ -362,6 +366,17 @@ body{
 
 <div id="banner" class="pixel"></div>
 
+<!-- ширма: закрывает экран при передаче устройства другому игроку, иначе скрытые
+     кубы (шипы, мина) видны обоим и ловушки не работают -->
+<div id="veil">
+  <div class="panel">
+    <div id="veilIcon">🖐</div>
+    <h2 class="pixel" id="veilWho"></h2>
+    <p id="veilText">Передай устройство и не подглядывай.</p>
+    <button class="btn" id="veilBtn">Я готов</button>
+  </div>
+</div>
+
 <div id="overlay">
   <div class="panel">
     <h2 class="pixel" id="ovTitle"></h2>
@@ -447,9 +462,34 @@ var MODE_ORDER=['classic','big','draft','race','territory','durak'];
 
 var S=null, sel=null, busy=false, fx={placed:-1,boom:[]};
 var draftOffer=[], draftSel=[];
-var hotseat=false;
+var hotseat=false;   // выбор в меню: посадить за второе сиденье человека вместо бота
 
-function pname(o){return S&&S.hotseat?(o==='p'?'Игрок 1':'Игрок 2'):(o==='p'?'Ты':'Враг');}
+/* ---------------- сиденья ----------------
+   За сиденьем сидит человек, бот или (в будущем) удалённый игрок; сиденье может
+   быть локальным — то есть играть на этом устройстве. Через это выражается всё:
+   ждать ввода или звать бота, как называть игрока, нужна ли ширма.
+
+   PVE          → p:human(local), e:bot
+   PVP хотсит   → p:human(local), e:human(local)
+   сеть (потом) → p:human(local), e:remote(не local) + любые боты
+
+   Ключи 'p'/'e' пока остаются идентификаторами сидений. */
+function makeSeats(secondIsHuman){
+  return {
+    p:{kind:'human', local:true,  name:secondIsHuman?'Игрок 1':'Ты'},
+    e:secondIsHuman
+      ?{kind:'human', local:true,  name:'Игрок 2'}
+      :{kind:'bot',   local:false, name:'Враг'}
+  };
+}
+function seat(o){return (S&&S.seats&&S.seats[o])?S.seats[o]:{kind:'bot',local:false,name:o==='p'?'Ты':'Враг'};}
+function seatKind(o){return seat(o).kind;}
+function seatName(o){return seat(o).name;}
+function seatLocal(o){return !!seat(o).local;}
+function seatIsHuman(o){return seatKind(o)==='human';}
+// «два человека за одним устройством» — только в этом случае состояние прячется ширмой
+function sharedDevice(){return seatIsHuman('p')&&seatLocal('p')&&seatIsHuman('e')&&seatLocal('e');}
+function pname(o){return seatName(o);}
 
 function rnd(n){return Math.floor(Math.random()*n);}
 function pickType(){
@@ -477,7 +517,7 @@ function showMenu(){
   list.appendChild(tg);
   MODE_ORDER.forEach(function(k){
     var m=MODES[k];
-    var sub=m.sub+((hotseat&&k==='durak')?' · вдвоём пока нельзя, будет против ИИ':'');
+    var sub=m.sub;
     var b=document.createElement('button');
     b.className='modebtn';
     b.innerHTML='<div class="mt">'+m.title+'</div><div class="ms">'+sub+'</div>';
@@ -538,13 +578,14 @@ function renderDraft(){
 /* ---------------- match flow ---------------- */
 function initMatch(key, pDeckFull, eDeckFull){
   var cfg=MODES[key];
-  S={modeKey:key, cfg:cfg, token:Math.random(), round:0, firstP:true, hotseat:hotseat,
+  S={modeKey:key, cfg:cfg, token:Math.random(), round:0, firstP:true,
+     seats:makeSeats(hotseat), veil:null,
      pScore:0, eScore:0, pTotal:0, eTotal:0, history:[], histSel:-1,
      pHand:[], eHand:[], pDeck:pDeckFull||[], eDeck:eDeckFull||[]};
   if(cfg.kind==='lives'){S.pLives=LIVESMAX; S.eLives=LIVESMAX;}
   if(cfg.kind==='bo3'){S.pWins=0; S.eWins=0;}
-  $('whoTop').textContent=S.hotseat?'Игрок 2':'Враг';
-  $('whoBottom').textContent=S.hotseat?'Игрок 1':'Ты';
+  $('whoTop').textContent=seatName('e');
+  $('whoBottom').textContent=seatName('p');
   $('modeTag').textContent=cfg.title.toLowerCase();
   newRound();
 }
@@ -571,15 +612,33 @@ function newRound(){
   while(S.eHand.length<3&&S.eDeck.length)S.eHand.push(S.eDeck.pop());
   S.turn=S.firstP?'p':'e';
   S.firstP=!S.firstP;
-  sel=null; busy=(S.turn==='e'&&!S.hotseat);
+  sel=null; busy=true;
+  S.shownTo=null;   // экран пока ничей — перед первым ходом раунда встанет ширма
   fx={placed:-1,boom:[]};
   render();
   banner('РАУНД '+S.round);
   toast('');
   S.history=[]; S.histSel=-1;
   renderHistory();
-  if(S.turn==='e'&&!S.hotseat)schedule(enemyTurn,1200);
+  beginTurn(S.turn,1200);
 }
+
+/* Единая точка передачи хода: решает, звать бота, ждать ввода или сперва закрыть
+   экран ширмой. Сетевой игрок позже добавляется сюда же — ещё одной ветвью по
+   seatKind, без правок в остальной игре. */
+function beginTurn(o,delay){
+  sel=null;
+  if(seatKind(o)==='bot'){
+    busy=true; render();
+    schedule(botTurn,delay||1100);
+    return;
+  }
+  if(needVeil(o)){showVeil(o); return;}
+  S.shownTo=o;
+  busy=false; render();
+}
+// ширма нужна, когда экран сейчас «принадлежит» другому человеку за тем же устройством
+function needVeil(o){return sharedDevice()&&seatIsHuman(o)&&S.shownTo!==o;}
 
 function moves(o){return o==='p'?S.pMoves:S.eMoves;}
 function incMoves(o){if(o==='p')S.pMoves++;else S.eMoves++;}
@@ -753,7 +812,7 @@ function advance(){
   if(moves(next)>=M)next=S.turn;
   S.turn=next;
   if(!hasLegal(next)){
-    toast(S.hotseat?(pname(next)+': нет ходов — пас'):(next==='p'?'У тебя нет ходов — пас':'У врага нет ходов — пас'), next==='e');
+    toast(seatName(next)+': нет ходов — пас', next==='e');
     // пас тоже попадает в ленту, иначе в истории два хода одного игрока подряд
     // без объяснения, куда девался ход другого
     S.history.push({n:S.history.length+1, who:next, pts:0, parts:[{t:'Пас — нет ходов', icon:'⏭'}], mined:false});
@@ -761,9 +820,7 @@ function advance(){
     incMoves(next); render(); renderHistory();
     schedule(advance,800); return;
   }
-  busy=(next==='e'&&!S.hotseat);
-  render();
-  if(next==='e'&&!S.hotseat)schedule(enemyTurn,1100);
+  beginTurn(next,1100);
 }
 
 function endRound(){
@@ -772,8 +829,9 @@ function endRound(){
   render();
   if(k==='lives'){
     var t,txt;
-    if(S.pScore>S.eScore){S.eLives--; t=S.hotseat?'РАУНД ЗА ИГРОКОМ 1':'РАУНД ТВОЙ!'; txt=S.pScore+' : '+S.eScore+' — '+(S.hotseat?'Игрок 2 теряет':'враг теряет')+' ♥';}
-    else if(S.eScore>S.pScore){S.pLives--; t=S.hotseat?'РАУНД ЗА ИГРОКОМ 2':'РАУНД ЗА ВРАГОМ'; txt=S.pScore+' : '+S.eScore+' — '+(S.hotseat?'Игрок 1 теряет':'ты теряешь')+' ♥';}
+    var vb=(seatKind('e')==='bot');
+    if(S.pScore>S.eScore){S.eLives--; t=vb?'РАУНД ТВОЙ!':(seatName('p').toUpperCase()+' БЕРЁТ РАУНД'); txt=S.pScore+' : '+S.eScore+' — '+seatName('e')+' теряет ♥';}
+    else if(S.eScore>S.pScore){S.pLives--; t=vb?'РАУНД ЗА ВРАГОМ':(seatName('e').toUpperCase()+' БЕРЁТ РАУНД'); txt=S.pScore+' : '+S.eScore+' — '+seatName('p')+' теряет ♥';}
     else{t='НИЧЬЯ'; txt=S.pScore+' : '+S.eScore+' — жизни целы';}
     render();
     if(S.pLives<=0||S.eLives<=0){schedule(matchEnd,700);}
@@ -781,8 +839,9 @@ function endRound(){
   }
   else if(k==='bo3'){
     var msg,sub;
-    var w1=S.hotseat?'РАУНД ЗА ИГРОКОМ 1':'РАУНД ТВОЙ!';
-    var w2=S.hotseat?'РАУНД ЗА ИГРОКОМ 2':'РАУНД ЗА ВРАГОМ';
+    var vb3=(seatKind('e')==='bot');
+    var w1=vb3?'РАУНД ТВОЙ!':(seatName('p').toUpperCase()+' БЕРЁТ РАУНД');
+    var w2=vb3?'РАУНД ЗА ВРАГОМ':(seatName('e').toUpperCase()+' БЕРЁТ РАУНД');
     if(S.cfg.winBy==='count'){
       var pc=ownerCount(S.board,'p'), ec=ownerCount(S.board,'e');
       if(pc>ec){S.pWins++; msg=w1; sub='Кубов на поле '+pc+' : '+ec;}
@@ -809,15 +868,17 @@ function endRound(){
 function matchEnd(){
   busy=true;
   var k=S.cfg.kind, title, text;
-  var W1=S.hotseat?'ПОБЕДА ИГРОКА 1!':'ПОБЕДА!';
-  var W2=S.hotseat?'ПОБЕДА ИГРОКА 2!':'ПОРАЖЕНИЕ';
+  // против бота обращаемся к игроку напрямую, между людьми — по именам сидений
+  var vsBot=(seatKind('e')==='bot');
+  var W1=vsBot?'ПОБЕДА!':(seatName('p').toUpperCase()+' ПОБЕДИЛ!');
+  var W2=vsBot?'ПОРАЖЕНИЕ':(seatName('e').toUpperCase()+' ПОБЕДИЛ!');
   if(k==='lives'){
-    if(S.pLives<=0){title=W2; text=S.hotseat?'Игрок 1 остался без жизней.':'Подземелье забрало твои кости.';}
-    else{title=W1; text=S.hotseat?'Игрок 2 остался без жизней.':'Враг повержен!';}
+    if(S.pLives<=0){title=W2; text=vsBot?'Подземелье забрало твои кости.':(seatName('p')+' остался без жизней.');}
+    else{title=W1; text=vsBot?'Враг повержен!':(seatName('e')+' остался без жизней.');}
   }
   else if(k==='race'){
-    if(S.pScore>=S.cfg.target&&S.pScore>=S.eScore){title=W1; text=(S.hotseat?'Игрок 1 добежал':'Ты добежал')+' до '+S.cfg.target+'! Итог '+S.pScore+' : '+S.eScore;}
-    else if(S.eScore>=S.cfg.target){title=W2; text=(S.hotseat?'Игрок 2 добежал':'Враг добежал')+' первым. Итог '+S.pScore+' : '+S.eScore;}
+    if(S.pScore>=S.cfg.target&&S.pScore>=S.eScore){title=W1; text=seatName('p')+' добежал до '+S.cfg.target+'! Итог '+S.pScore+' : '+S.eScore;}
+    else if(S.eScore>=S.cfg.target){title=W2; text=seatName('e')+' добежал первым. Итог '+S.pScore+' : '+S.eScore;}
     else{title='НИЧЬЯ'; text='Итог '+S.pScore+' : '+S.eScore;}
   }
   else{ // bo3
@@ -862,30 +923,34 @@ function evalMove(die,ci,owner){
   }
   return gain;
 }
-function enemyTurn(){
+// ход бота за текущее сиденье (раньше назывался enemyTurn — теперь бот может
+// сидеть за любым сиденьем, в том числе в сетевом лобби)
+function botTurn(){
   if(!S)return;
-  var best=null;
-  S.eHand.forEach(function(die,hi){
-    legalTargets(die,'e').forEach(function(ci){
+  var o=S.turn, best=null;
+  var hand=o==='p'?S.pHand:S.eHand;
+  hand.forEach(function(die,hi){
+    legalTargets(die,o).forEach(function(ci){
       // шум пропорционален оценке: фиксированные +5 при gain в сотни ИИ не расшатывали
-      var raw=evalMove(die,ci,'e');
+      var raw=evalMove(die,ci,o);
       var sc=raw+Math.random()*Math.max(4,raw*0.06);
       if(!best||sc>best.sc)best={hi:hi,ci:ci,sc:sc};
     });
   });
   if(!best){schedule(advance,400);return;}
-  doMove('e',best.hi,best.ci);
+  doMove(o,best.hi,best.ci);
 }
 
 /* ---------------- Дуракуб ---------------- */
 var SUITS=['♠','♥','♦','♣'];
 function initDurak(key){
   var cfg=MODES[key];
-  S={modeKey:key, cfg:cfg, token:Math.random(), hotseat:false,
+  S={modeKey:key, cfg:cfg, token:Math.random(),
+     seats:makeSeats(hotseat), veil:null, shownTo:null,
      talon:makeDurakDeck(), discard:0, trump:0,
      pHand:[], eHand:[], table:[], attacker:'p', maxAtt:6, phase:'idle'};
-  $('whoTop').textContent='Враг';
-  $('whoBottom').textContent='Ты';
+  $('whoTop').textContent=seatName('e');
+  $('whoBottom').textContent=seatName('p');
   S.trump=S.talon[0].suit; // нижний куб колоды — козырь
   for(var i=0;i<6;i++){S.pHand.push(S.talon.pop()); S.eHand.push(S.talon.pop());}
   $('modeTag').textContent=cfg.title.toLowerCase();
@@ -917,13 +982,36 @@ function undefendedIdx(){
 }
 function dieLabel(d){return d.value+SUITS[d.suit];}
 
+/* Роли нейтральны: за атакующим и защищающимся сиденьем может сидеть человек или
+   бот. Фаза говорит, ЧТО делается, а кто это делает — выводится из S.attacker.
+   Раньше фазы назывались pAttack/pDefend и означали «игрок против ИИ», из-за чего
+   режим не работал вдвоём. */
+function other(o){return o==='p'?'e':'p';}
+function handOf(o){return o==='p'?S.pHand:S.eHand;}
+function durakActor(){
+  if(S.phase==='attack')return S.attacker;
+  if(S.phase==='defend')return other(S.attacker);
+  return null;
+}
+// передача управления: бот думает, человек за общим устройством видит ширму
+function durakNext(delay){
+  var o=durakActor();
+  if(!o){busy=true; render(); return;}
+  if(seatKind(o)==='bot'){
+    busy=true; render();
+    schedule(function(){botDurak();},delay||900);
+    return;
+  }
+  if(needVeil(o)){showVeil(o); return;}
+  S.shownTo=o;
+  busy=false; render();
+}
 function startBout(){
   S.table=[];
-  var defH=S.attacker==='p'?S.eHand:S.pHand;
-  S.maxAtt=Math.min(6,defH.length);
+  S.maxAtt=Math.min(6,handOf(other(S.attacker)).length);
   if(checkDurakEnd())return;
-  if(S.attacker==='p'){S.phase='pAttack'; busy=false; render();}
-  else{S.phase='busy'; busy=true; render(); schedule(aiAttack,1000);}
+  S.phase='attack';
+  durakNext(1000);
 }
 function refillHands(){
   var order=S.attacker==='p'?[S.pHand,S.eHand]:[S.eHand,S.pHand];
@@ -934,10 +1022,15 @@ function checkDurakEnd(){
   var p0=S.pHand.length===0, e0=S.eHand.length===0;
   if(!p0&&!e0)return false;
   busy=true; S.phase='over'; render();
-  var title,text;
+  var title,text, vsBot=(seatKind('e')==='bot');
   if(p0&&e0){title='НИЧЬЯ'; text='Оба вышли одновременно — дуракубов сегодня нет.';}
-  else if(p0){title='ПОБЕДА!'; text='Ты вышел первым. Враг — Дуракуб!';}
-  else{title='ДУРАКУБ!'; text='Ты остался с кубами. Дуракуб — это ты.';}
+  else if(p0){
+    title=vsBot?'ПОБЕДА!':(seatName('p').toUpperCase()+' ПОБЕДИЛ!');
+    text=seatName('p')+' вышел первым. '+seatName('e')+' — Дуракуб!';
+  }else{
+    title=vsBot?'ДУРАКУБ!':(seatName('e').toUpperCase()+' ПОБЕДИЛ!');
+    text=seatName('p')+' остался с кубами. Дуракуб — '+(vsBot?'это ты':seatName('p'))+'.';
+  }
   var key=S.modeKey;
   schedule(function(){showOverlay(title,text,'Ещё раз',function(){startMode(key);});},700);
   return true;
@@ -960,106 +1053,112 @@ function boutTaken(taker){
   startBout();
 }
 
-function playerAttackDie(i){
-  if(S.phase!=='pAttack')return;
-  var die=S.pHand[i];
-  if(!canThrow(die)||S.table.length>=S.maxAtt||S.eHand.length===0)return;
-  S.pHand.splice(i,1);
+/* ---- действия: одинаковы для человека и бота, отличается только источник ---- */
+function durakAttack(o,i){
+  if(S.phase!=='attack'||o!==S.attacker)return false;
+  var hand=handOf(o), die=hand[i];
+  if(!die||!canThrow(die)||S.table.length>=S.maxAtt||handOf(other(o)).length===0)return false;
+  hand.splice(i,1);
   S.table.push({a:die,d:null});
-  S.phase='busy'; busy=true; render();
-  schedule(aiDefend,900);
+  toast(seatName(o)+(S.table.length>1?' подкидывает: ':' атакует: ')+dieLabel(die), o==='e');
+  S.phase='defend';
+  busy=true; render();
+  schedule(function(){durakNext(700);},600);
+  return true;
 }
-function aiDefend(){
-  var idx=undefendedIdx();
-  if(idx<0){S.phase='pAttack'; busy=false; render(); return;}
-  var att=S.table[idx].a;
-  var best=-1, bc=1e9;
-  S.eHand.forEach(function(d,i){
-    if(!defBeats(d,att))return;
-    var cost=d.value+(d.suit===S.trump?8:0);
-    if(cost<bc){bc=cost; best=i;}
-  });
-  if(best<0){
-    toast('Враг не отбился — забирает стол',true);
-    schedule(function(){boutTaken('e');},900);
-    return;
-  }
-  var d=S.eHand.splice(best,1)[0];
+function durakDefend(o,i){
+  if(S.phase!=='defend'||o!==other(S.attacker))return false;
+  var idx=undefendedIdx(); if(idx<0)return false;
+  var att=S.table[idx].a, hand=handOf(o), d=hand[i];
+  if(!d||!defBeats(d,att))return false;
+  hand.splice(i,1);
   S.table[idx].d=d;
-  toast('Враг отбил '+dieLabel(att)+' кубом '+dieLabel(d),true);
-  S.phase='pAttack'; busy=false; render();
+  toast(seatName(o)+' отбил '+dieLabel(att)+' кубом '+dieLabel(d), o==='e');
+  S.phase='attack';
+  busy=true; render();
+  schedule(function(){durakNext(700);},600);
+  return true;
 }
-function playerBito(){
-  if(S.phase!=='pAttack'||!S.table.length||undefendedIdx()>=0)return;
+function durakBito(o){
+  if(S.phase!=='attack'||o!==S.attacker||!S.table.length||undefendedIdx()>=0)return false;
   S.phase='busy'; busy=true; render();
   toast('Бито');
   schedule(boutBeaten,600);
+  return true;
+}
+function durakTake(o){
+  if(S.phase!=='defend'||o!==other(S.attacker))return false;
+  S.phase='busy'; busy=true; render();
+  toast(seatName(o)+' забирает стол', o==='e');
+  schedule(function(){boutTaken(o);},700);
+  return true;
 }
 
-function aiAttack(){
-  var best=-1, bc=1e9;
-  S.eHand.forEach(function(d,i){
-    var c=d.value+(d.suit===S.trump?8:0);
-    if(c<bc){bc=c; best=i;}
-  });
-  if(best<0){boutBeaten(); return;}
-  var d=S.eHand.splice(best,1)[0];
-  S.table.push({a:d,d:null});
-  toast('Враг атакует: '+dieLabel(d),true);
-  S.phase='pDefend'; busy=false; render();
-}
-function playerDefendDie(i){
-  if(S.phase!=='pDefend')return;
-  var idx=undefendedIdx(); if(idx<0)return;
-  var att=S.table[idx].a, d=S.pHand[i];
-  if(!defBeats(d,att))return;
-  S.pHand.splice(i,1);
-  S.table[idx].d=d;
-  S.phase='busy'; busy=true; render();
-  schedule(aiThrow,900);
-}
-function aiThrow(){
-  if(S.table.length>=S.maxAtt||S.pHand.length===0){
-    toast('Бито — враг закончил атаку',true);
-    schedule(boutBeaten,700); return;
+/* ---- бот: те же эвристики, что были в aiAttack/aiThrow/aiDefend ---- */
+function botDurak(){
+  var o=durakActor();
+  if(!o||seatKind(o)!=='bot')return;
+  var hand=handOf(o), best=-1, bc=1e9;
+  if(S.phase==='defend'){
+    var idx=undefendedIdx();
+    if(idx<0){durakNext(); return;}
+    var att=S.table[idx].a;
+    hand.forEach(function(d,i){
+      if(!defBeats(d,att))return;
+      var cost=d.value+(d.suit===S.trump?8:0);
+      if(cost<bc){bc=cost; best=i;}
+    });
+    if(best<0){durakTake(o); return;}   // не отбился — забирает стол
+    durakDefend(o,best);
+    return;
   }
-  var vs=tableValues();
-  var best=-1, bc=1e9;
-  S.eHand.forEach(function(d,i){
-    if(!vs[d.value])return;
-    if(S.talon.length>2&&(d.value>4||d.suit===S.trump))return;
+  // атака: первый куб — самый дешёвый; подкидывать только по значениям со стола
+  var first=(S.table.length===0);
+  if(!first&&(S.table.length>=S.maxAtt||handOf(other(o)).length===0)){durakBito(o); return;}
+  var vs=first?null:tableValues();
+  hand.forEach(function(d,i){
+    if(vs&&!vs[d.value])return;
+    // пока в колоде есть запас, бот берёгет козыри и старшие кубы для подкидывания
+    if(!first&&S.talon.length>2&&(d.value>4||d.suit===S.trump))return;
     var c=d.value+(d.suit===S.trump?8:0);
     if(c<bc){bc=c; best=i;}
   });
   if(best<0){
-    toast('Бито — враг закончил атаку',true);
-    schedule(boutBeaten,700); return;
+    if(first){durakNext(); return;}     // атаковать нечем — кон закрывается
+    durakBito(o); return;
   }
-  var d=S.eHand.splice(best,1)[0];
-  S.table.push({a:d,d:null});
-  toast('Враг подкидывает: '+dieLabel(d),true);
-  S.phase='pDefend'; busy=false; render();
-}
-function playerTake(){
-  if(S.phase!=='pDefend')return;
-  S.phase='busy'; busy=true; render();
-  toast('Ты забираешь стол');
-  schedule(function(){boutTaken('p');},700);
+  durakAttack(o,best);
 }
 
 function renderDurak(){
+  // низ экрана — рука того, кто действует (в хотсите она переезжает между людьми),
+  // верх — рубашки соперника
+  var me=(sharedDevice()&&durakActor())?durakActor():'p';
+  var foe=other(me);
+  var myHand=handOf(me), foeHand=handOf(foe);
+  var acting=durakActor();
+  var iAct=(acting===me);
+
   $('summary').innerHTML='';
   $('pHearts').innerHTML=''; $('eHearts').innerHTML='';
-  $('pScore').textContent=S.pHand.length;
-  $('eScore').textContent=S.eHand.length;
+  $('whoBottom').textContent=seatName(me);
+  $('whoTop').textContent=seatName(foe);
+  $('pScore').textContent=myHand.length;
+  $('eScore').textContent=foeHand.length;
+  $('pScore').className='score pixel'; $('eScore').className='score pixel';
   $('pDeck').textContent='Колода: '+S.talon.length;
   $('eDeck').textContent='Бито: '+S.discard;
-  $('eHand').innerHTML=S.eHand.map(function(){return'<div class="mini"></div>';}).join('');
+  $('eHand').innerHTML=foeHand.map(function(){return'<div class="mini"></div>';}).join('');
   $('turninfo').textContent='КОЗЫРЬ '+SUITS[S.trump]+' · СТОЛ '+S.table.length+'/'+S.maxAtt;
   var w=$('whose');
-  if(S.phase==='pAttack'){w.textContent='ТЫ АТАКУЕШЬ'; w.className='me';}
-  else if(S.phase==='pDefend'){w.textContent='ОТБИВАЙСЯ!'; w.className='foe';}
-  else{w.textContent='ХОД ВРАГА'; w.className='foe';}
+  if(!acting){w.textContent='…'; w.className='foe';}
+  else if(iAct){
+    w.textContent=(S.phase==='attack')?'ТЫ АТАКУЕШЬ':'ОТБИВАЙСЯ!';
+    w.className=(S.phase==='attack')?'me':'foe';
+  }else{
+    w.textContent='ХОД: '+seatName(acting).toUpperCase();
+    w.className='foe';
+  }
 
   var bd=$('board'); bd.classList.add('durak');
   var html='';
@@ -1075,52 +1174,57 @@ function renderDurak(){
   }
   bd.innerHTML=html;
 
+  // подсвечиваем только то, чем может действовать местный человек прямо сейчас
+  var canInput=iAct&&!busy&&!S.veil&&seatIsHuman(me)&&seatLocal(me);
   var validIdx=[];
-  if(S.phase==='pAttack'){
-    var can=S.table.length<S.maxAtt&&S.eHand.length>0;
-    if(can)S.pHand.forEach(function(d,i){if(canThrow(d))validIdx.push(i);});
-  }else if(S.phase==='pDefend'){
+  if(canInput&&S.phase==='attack'){
+    if(S.table.length<S.maxAtt&&foeHand.length>0)
+      myHand.forEach(function(d,i){if(canThrow(d))validIdx.push(i);});
+  }else if(canInput&&S.phase==='defend'){
     var idx=undefendedIdx();
-    if(idx>=0){var att=S.table[idx].a; S.pHand.forEach(function(d,i){if(defBeats(d,att))validIdx.push(i);});}
+    if(idx>=0){var att=S.table[idx].a; myHand.forEach(function(d,i){if(defBeats(d,att))validIdx.push(i);});}
   }
   $('pHand').className='wrap';
-  $('pHand').innerHTML=S.pHand.map(function(d,i){
+  $('pHand').innerHTML=myHand.map(function(d,i){
     var ok=validIdx.indexOf(i)>=0;
     return'<div class="hdie su'+d.suit+(ok?' ok':' disabled')+'" data-h="'+i+'">'
       +'<span class="val pixel">'+d.value+'</span>'
       +'<span class="sbadge'+(d.suit===S.trump?' trg':'')+'">'+SUITS[d.suit]+'</span></div>';
   }).join('');
 
-  if(S.phase==='pAttack'){
+  if(!canInput){
+    $('selinfo').innerHTML=(acting&&seatKind(acting)==='bot')?'Враг думает…':'Секунду…';
+  }else if(S.phase==='attack'){
     $('selinfo').innerHTML=S.table.length===0
       ?'Атакуй любым кубом.'
       :'Подкинь куб со значением как на столе или жми «Бито».';
-  }else if(S.phase==='pDefend'){
+  }else{
     var ui=undefendedIdx();
     if(ui>=0){
       var a=S.table[ui].a;
       $('selinfo').innerHTML='Побей <b>'+dieLabel(a)+'</b>: старше той же масти или козырем '+SUITS[S.trump]+'.';
     }else $('selinfo').innerHTML='';
-  }else $('selinfo').innerHTML='Враг думает…';
+  }
 
   var ab=$('actionbar'); ab.innerHTML='';
-  if(S.phase==='pAttack'&&S.table.length&&undefendedIdx()<0){
+  if(canInput&&S.phase==='attack'&&S.table.length&&undefendedIdx()<0){
     var b1=document.createElement('button');
     b1.className='btn'; b1.textContent='Бито';
-    b1.onclick=playerBito; ab.appendChild(b1);
+    b1.onclick=function(){durakBito(me);}; ab.appendChild(b1);
   }
-  if(S.phase==='pDefend'){
+  if(canInput&&S.phase==='defend'){
     var b2=document.createElement('button');
     b2.className='btn'; b2.textContent='Взять';
-    b2.onclick=playerTake; ab.appendChild(b2);
+    b2.onclick=function(){durakTake(me);}; ab.appendChild(b2);
   }
 
   var hd=document.querySelectorAll('#pHand .hdie.ok');
   for(var q=0;q<hd.length;q++){
     hd[q].onclick=function(){
+      if(!canInput)return;
       var i=+this.getAttribute('data-h');
-      if(S.phase==='pAttack')playerAttackDie(i);
-      else if(S.phase==='pDefend')playerDefendDie(i);
+      if(S.phase==='attack')durakAttack(me,i);
+      else if(S.phase==='defend')durakDefend(me,i);
     };
   }
 }
@@ -1260,7 +1364,7 @@ function renderHistory(){
   }).join('');
   box.innerHTML=strip
     +'<div class="hcard'+(foe?' foe':'')+'">'
-    +'<div class="hhdr"><span class="hwho">'+(foe?(S.hotseat?'ХОД ИГРОКА 2':'ХОД ВРАГА'):(S.hotseat?'ХОД ИГРОКА 1':'ТВОЙ ХОД'))+' '+m.n+'</span>'
+    +'<div class="hhdr"><span class="hwho">'+((!foe&&seatKind('e')==='bot')?('ТВОЙ ХОД '+m.n):(seatName(m.who).toUpperCase()+' · ХОД '+m.n))+'</span>'
     +'<span class="htot'+(m.pts<0?' neg':'')+'">'+(m.mined?'💥 0':Math.abs(m.pts))+'</span></div>'
     +(m.parts.length?'<div class="hchips">'+chips+'</div>':'')
     +'</div>';
@@ -1333,16 +1437,14 @@ function render(){
   var rlabel=(k==='bo3')?('РАУНД '+S.round+'/3'):('РАУНД '+S.round);
   $('turninfo').textContent=rlabel+' · ХОД '+curMoves+'/'+S.cfg.moves;
   var w=$('whose');
-  if(S.hotseat){
-    w.textContent=S.turn==='p'?'ХОД ИГРОКА 1':'ХОД ИГРОКА 2';
-    w.className=S.turn==='p'?'me':'foe';
-  }else{
-    w.textContent=S.turn==='p'?'ТВОЙ ХОД':'ХОД ВРАГА';
-    w.className=S.turn==='p'?'me':'foe';
-  }
+  w.textContent=(seatKind(S.turn)==='human'&&!sharedDevice()&&S.turn==='p')
+    ? 'ТВОЙ ХОД' : ('ХОД: '+seatName(S.turn).toUpperCase());
+  w.className=S.turn==='p'?'me':'foe';
 
-  var actor=S.hotseat?S.turn:'p';
-  var canAct=!busy&&(S.hotseat||S.turn==='p');
+  // чьими глазами смотрим: за одним устройством — тот, чей ход; иначе своё сиденье
+  // (при сетевой игре здесь будет сиденье этого клиента)
+  var actor=sharedDevice()?S.turn:'p';
+  var canAct=!busy&&!S.veil&&seatIsHuman(S.turn)&&seatLocal(S.turn);
   var aHand=actor==='p'?S.pHand:S.eHand;
   var valid=(sel!==null&&canAct&&aHand[sel])?legalTargets(aHand[sel],actor):[];
   var hint=canAct?findHint(actor):null;
@@ -1379,15 +1481,17 @@ function render(){
   }else if(hint){
     $('selinfo').innerHTML='<span class="tip">💡 Светящийся куб соберёт <b>'+hint.n+' +'+hint.b+'</b>!</span>';
   }else{
-    $('selinfo').innerHTML=canAct?'Выбери куб в руке.':(S.hotseat?'Секунду…':'Враг думает…');
+    $('selinfo').innerHTML=canAct?'Выбери куб в руке.':(seatKind(S.turn)==='bot'?'Враг думает…':'Секунду…');
   }
   bindEvents();
 }
+// ввод принимается только когда за текущим сиденьем сидит местный человек
+function inputAllowed(){return !busy&&!S.veil&&seatIsHuman(S.turn)&&seatLocal(S.turn);}
 function bindEvents(){
   var hd=document.querySelectorAll('.hdie');
   for(var a=0;a<hd.length;a++){
     hd[a].onclick=function(){
-      if(busy||(!S.hotseat&&S.turn!=='p'))return;
+      if(!inputAllowed())return;
       var i=+this.getAttribute('data-h');
       sel=(sel===i)?null:i;
       render();
@@ -1396,9 +1500,8 @@ function bindEvents(){
   var cs=document.querySelectorAll('.cell');
   for(var b=0;b<cs.length;b++){
     cs[b].onclick=function(){
-      if(busy||sel===null)return;
-      if(!S.hotseat&&S.turn!=='p')return;
-      var actor=S.hotseat?S.turn:'p';
+      if(!inputAllowed()||sel===null)return;
+      var actor=S.turn;
       var aHand=actor==='p'?S.pHand:S.eHand;
       var i=+this.getAttribute('data-i');
       if(!aHand[sel]||legalTargets(aHand[sel],actor).indexOf(i)<0)return;
@@ -1425,6 +1528,28 @@ function banner(msg){
   void b.offsetWidth;
   b.classList.add('show');
 }
+/* Ширма. Пока показана — ввод заблокирован и экран закрыт; по «Я готов» экран
+   переходит новому игроку. Дальше идёт та ветка, которая ждала этой передачи:
+   для боевых режимов просто рендер, для Дуракуба — продолжение кона. */
+function showVeil(o,after){
+  S.veil={seat:o, after:after||null};
+  busy=true; sel=null;
+  // экран закрываем ДО перерисовки: под ширмой уже рука нового игрока
+  // фразы строим так, чтобы имя стояло в именительном падеже — иначе «Ход Игрок 1»
+  $('veilWho').textContent=seatName(o)+', твой ход';
+  $('veil').classList.add('show');
+  render();
+}
+function hideVeil(){
+  var v=S.veil;
+  S.veil=null;
+  $('veil').classList.remove('show');
+  if(!v)return;
+  S.shownTo=v.seat;
+  busy=false;
+  render();
+  if(v.after)v.after();
+}
 function showOverlay(title,text,btn,cb){
   $('ovTitle').textContent=title;
   $('ovText').textContent=text;
@@ -1434,6 +1559,7 @@ function showOverlay(title,text,btn,cb){
 }
 $('ovBtn2').onclick=function(){$('overlay').classList.remove('show');showMenu();};
 $('menuBtn').onclick=function(){showMenu();};
+$('veilBtn').onclick=function(){hideVeil();};
 
 showMenu();
 </script>
