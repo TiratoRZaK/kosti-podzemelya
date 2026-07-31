@@ -17,7 +17,14 @@ var type_id: String = "basic"
 var is_player: bool = true
 var show_badge: bool = true      # скрытый тип чужого куба значка не получает
 var shield_charges: int = 0
-var clickable: bool = false
+
+## Куб перехватывает тапы только когда по нему действительно можно нажать.
+## Иначе куб на доске съедал тап, предназначенный клетке под ним, и нажималась
+## лишь тонкая рамка вокруг — казалось, что «мало мест, куда ткнуть».
+var clickable: bool = false:
+	set(v):
+		clickable = v
+		mouse_filter = Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
 
 var _face: ColorRect
 var _mat: ShaderMaterial
@@ -26,7 +33,8 @@ var _badge_label: Label
 var _pips: Control
 
 func _ready() -> void:
-	mouse_filter = Control.MOUSE_FILTER_STOP
+	# mouse_filter здесь не задаём: им управляет clickable, и жёсткая установка
+	# перетирала IGNORE, выставленный до добавления в дерево
 	_build()
 	resized.connect(_sync_size)
 
@@ -127,6 +135,12 @@ func play_place() -> void:
 	tw.tween_property(self, "scale", Vector2(1.10, 1.10), 0.14).set_ease(Tween.EASE_OUT)
 	tw.tween_property(self, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK)
 
+## Подсказка: куб мягко пульсирует, пока игрок не сделал свой выбор.
+func play_hint() -> void:
+	var tw := create_tween().set_loops()
+	tw.tween_method(_set_shader_float.bind("select"), 0.15, 0.75, 0.6).set_trans(Tween.TRANS_SINE)
+	tw.tween_method(_set_shader_float.bind("select"), 0.75, 0.15, 0.6).set_trans(Tween.TRANS_SINE)
+
 ## Вспышка: куб отдал очки в карточку хода.
 func play_glow() -> void:
 	var tw := create_tween()
@@ -143,11 +157,15 @@ func _get_param(param: String) -> float:
 	var v = _mat.get_shader_parameter(param)
 	return 0.0 if v == null else float(v)
 
-## Заряды щита: сегменты сверху, гаснут по ходам соперника. Их видит и соперник —
-## иначе непонятно, почему куб нельзя съесть.
+## Заряды щита: сегменты сверху плюс обводка по контуру. Обводка нужна, чтобы
+## сразу читалось «этот куб не съесть»: одних сегментов мало — игрок тыкал в
+## защищённый куб и не понимал, почему ход не проходит.
 func _draw_pips() -> void:
 	if shield_charges <= 0 and type_id != "shield":
 		return
+	if shield_charges > 0:
+		var r := Rect2(Vector2(1, 1), size - Vector2(2, size.y * 0.10))
+		_pips.draw_rect(r, Palette.CYAN, false, maxf(2.0, size.y * 0.035))
 	var seg := Vector2(size.x * 0.2, maxf(3.0, size.y * 0.055))
 	var gap := seg.x * 0.4
 	var total := seg.x * Rules.SHIELD_CHARGES + gap * (Rules.SHIELD_CHARGES - 1)

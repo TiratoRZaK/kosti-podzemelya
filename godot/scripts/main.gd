@@ -30,7 +30,15 @@ var turn_info: Label
 var turn_who: Label
 var board_grid: GridContainer
 var sel_info: Label
+var hist_strip: HBoxContainer
 var card_box: VBoxContainer
+var hist_sel := -1        # какая карточка раскрыта; -1 — последний ход
+var mode_tag: Label
+var toast_label: Label
+var banner_label: Label
+var rules_layer: Control
+var foe_deck: Label
+var hint: Dictionary = {}   # подсказка: какой куб и куда даст комбо
 var hand_row: HBoxContainer
 var my_name: Label
 var my_score: Label
@@ -62,6 +70,8 @@ func _parse_args() -> void:
 			_shot_mode = "veil"
 		elif a == "--shot-menu":
 			_shot_mode = "menu"
+		elif a == "--shot-rules":
+			_shot_mode = "rules"
 
 # ------------------------------------------------------------------ вид
 
@@ -128,6 +138,10 @@ func _build_ui() -> void:
 
 	root.add_child(_title_block())
 	root.add_child(_foe_zone())
+	toast_label = _label("", 12, Palette.GOLD_LIGHT)
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toast_label.custom_minimum_size.y = 18
+	root.add_child(toast_label)
 	root.add_child(_turn_bar())
 	board_grid = GridContainer.new()
 	board_grid.columns = 3
@@ -139,6 +153,16 @@ func _build_ui() -> void:
 	sel_info.custom_minimum_size.y = 32
 	sel_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(sel_info)
+	# лента ходов: таблетки с номером и итогом, тап раскрывает нужную карточку
+	hist_strip = HBoxContainer.new()
+	hist_strip.add_theme_constant_override("separation", 6)
+	hist_strip.custom_minimum_size.y = 26
+	var strip_scroll := ScrollContainer.new()
+	strip_scroll.custom_minimum_size.y = 30
+	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	strip_scroll.add_child(hist_strip)
+	root.add_child(strip_scroll)
 	# место под карточку хода держим всегда, иначе доска и рука прыгают
 	card_box = VBoxContainer.new()
 	card_box.custom_minimum_size.y = 92
@@ -152,12 +176,41 @@ func _build_ui() -> void:
 	add_child(veil_layer)
 	over_layer = _build_overlay()
 	add_child(over_layer)
+	rules_layer = _build_rules()
+	add_child(rules_layer)
+	# баннер поверх всего: «РАУНД 2», «500!». Подложка обязательна — без неё
+	# цифры кубов читаются сквозь текст
+	banner_label = _label("", 20, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
+	banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var bpanel := PanelContainer.new()
+	var bsb := StyleBoxFlat.new()
+	bsb.bg_color = Color(0.03, 0.02, 0.05, 0.88)
+	bsb.set_corner_radius_all(12)
+	bsb.border_color = Color(0.85, 0.63, 0.24, 0.5)
+	bsb.set_border_width_all(1)
+	bsb.content_margin_left = 18
+	bsb.content_margin_right = 18
+	bsb.content_margin_top = 10
+	bsb.content_margin_bottom = 10
+	bpanel.add_theme_stylebox_override("panel", bsb)
+	bpanel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	bpanel.z_index = 119
+	bpanel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bpanel.name = "BannerPanel"
+	# размером label управляет PanelContainer: свои anchors ломали расчёт и панель
+	# показывалась пустой рамкой
+	bpanel.add_child(banner_label)
+	add_child(bpanel)
+	bpanel.modulate.a = 0.0
 
 func _title_block() -> Control:
 	var box := VBoxContainer.new()
 	var t := _label("КОСТИ ПОДЗЕМЕЛЬЯ", 25, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(t)
+	mode_tag = _label("", 10, Palette.MUTED)
+	mode_tag.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(mode_tag)
 	return box
 
 func _foe_zone() -> Control:
@@ -174,9 +227,14 @@ func _foe_zone() -> Control:
 	row.add_child(_grow())
 	foe_score = _label("0", 20, Palette.GOLD_LIGHT, Palette.FONT_UI)
 	row.add_child(foe_score)
+	var row2 := HBoxContainer.new()
+	v.add_child(row2)
 	foe_hand_row = HBoxContainer.new()
 	foe_hand_row.add_theme_constant_override("separation", 6)
-	v.add_child(foe_hand_row)
+	row2.add_child(foe_hand_row)
+	row2.add_child(_grow())
+	foe_deck = _label("", 10, Palette.MUTED)
+	row2.add_child(foe_deck)
 	return panel
 
 func _turn_bar() -> Control:
@@ -213,6 +271,9 @@ func _my_zone() -> Control:
 	my_deck = _label("", 10, Palette.MUTED)
 	bottom.add_child(my_deck)
 	bottom.add_child(_grow())
+	var rules_btn := _button("Правила", true)
+	rules_btn.pressed.connect(func(): rules_layer.visible = true)
+	bottom.add_child(rules_btn)
 	var menu_btn := _button("Меню", true)
 	menu_btn.pressed.connect(_show_menu)
 	bottom.add_child(menu_btn)
@@ -256,10 +317,10 @@ func _build_menu() -> Control:
 	v.add_child(toggle)
 
 	for key in MatchState.MODE_ORDER:
-		var cfg: Dictionary = MatchState.MODES[key]
-		if String(cfg["deck"]) == "draft":
-			continue      # драфту нужен экран выбора колоды, он ещё не перенесён
-		v.add_child(_mode_button(key, cfg))
+		v.add_child(_mode_button(key, MatchState.MODES[key]))
+	var quit_btn := _button("Выход", true)
+	quit_btn.pressed.connect(func(): get_tree().quit())
+	v.add_child(quit_btn)
 	return layer
 
 ## Кнопка режима: название и описание отдельными строками с переносом.
@@ -312,6 +373,90 @@ func _build_veil() -> Control:
 	v.add_child(b)
 	return layer
 
+## Экран правил. Способности показаны сгенерированными иконками — здесь они
+## крупные (44px) и читаются, в отличие от значка на кубе, где остаются эмодзи.
+const ABILITY_ICONS := {
+	"shield": "res://assets/icons/icon_shield.png",
+	"spikes": "res://assets/icons/icon_spiked_ball.png",
+	"mine": "res://assets/icons/icon_bomb.png",
+	"jaw": "res://assets/icons/icon_jaw.png",
+	"friendly": "res://assets/icons/icon_handshake.png",
+	"warlock": "res://assets/icons/icon_orb.png",
+}
+const ABILITY_TEXT := {
+	"shield": "Два хода соперника его нельзя съесть — даже колдуном.",
+	"spikes": "Скрыт от соперника. Съевший теряет 10 очков.",
+	"mine": "Скрыта. Уничтожает себя и атакующего, ход сгорает.",
+	"jaw": "При выставлении съедает вражеский куб справа.",
+	"friendly": "Прибавляет к себе сумму значений соседей, максимум 12.",
+	"warlock": "Ест куб любого значения и копирует его. Щит не пробивает.",
+}
+
+func _build_rules() -> Control:
+	var layer := _full_dim(0.96)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := _panel(Palette.PANEL_2)
+	center.add_child(panel)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(330, 640)
+	panel.add_child(scroll)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	v.custom_minimum_size.x = 314
+	scroll.add_child(v)
+
+	var t := _label("Правила", 24, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(t)
+	v.add_child(_rules_head("Ход"))
+	v.add_child(_rules_line("Выбери куб в руке и поставь на пустую клетку или съешь вражеский."))
+	v.add_child(_rules_line("Базовый куб ест куб со значением не больше своего: шестёрка ест всех, единица — только единицу."))
+	v.add_child(_rules_head("Очки за ход"))
+	v.add_child(_rules_line("Съел — значение съеденного куба."))
+	v.add_child(_rules_line("Кубы на поле — сумма значений всех твоих кубов, начисляется каждый ход."))
+	v.add_child(_rules_line("Комбо из твоих кубов: пара +5, две пары +10, сет +15, фулл-хаус +25, каре +40, пятёрка +60, шестёрка +100."))
+	v.add_child(_rules_head("Особые кубы"))
+	for key in ["shield", "spikes", "mine", "jaw", "friendly", "warlock"]:
+		v.add_child(_ability_row(key))
+	var b := _button("Понятно")
+	b.pressed.connect(func(): rules_layer.visible = false)
+	v.add_child(b)
+	return layer
+
+func _rules_head(text: String) -> Control:
+	var l := _label(text, 14, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
+	l.custom_minimum_size.y = 26
+	return l
+
+func _rules_line(text: String) -> Control:
+	var l := _label("• " + text, 12, Palette.TEXT)
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size.x = 300
+	return l
+
+func _ability_row(key: String) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var path := String(ABILITY_ICONS[key])
+	if ResourceLoader.exists(path):
+		var ic := TextureRect.new()
+		ic.texture = load(path)
+		ic.custom_minimum_size = Vector2(44, 44)
+		ic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		ic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		row.add_child(ic)
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 1)
+	row.add_child(col)
+	col.add_child(_label(String(Rules.TYPES[key]["name"]), 12, Palette.GOLD_LIGHT))
+	var d := _label(String(ABILITY_TEXT[key]), 11, Palette.MUTED)
+	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	d.custom_minimum_size.x = 246
+	col.add_child(d)
+	return row
+
 func _build_overlay() -> Control:
 	var layer := _full_dim(0.9)
 	var center := CenterContainer.new()
@@ -340,7 +485,13 @@ func _start_mode(key: String) -> void:
 	selected = -1
 	state = MatchState.new_match(key, int(Time.get_unix_time_from_system()) & 0x7fffffff, second_is_human)
 	board_grid.columns = int(state["cfg"]["cols"])
+	hist_sel = -1
+	mode_tag.text = String(state["cfg"]["title"]).to_upper()
+	for c in card_box.get_children():
+		c.queue_free()
+	toast("")
 	_refresh()
+	banner("РАУНД %d" % int(state["round"]))
 	_begin_turn(String(state["turn"]))
 
 ## Единая точка передачи хода: бот, ширма или ожидание ввода. Сетевой игрок
@@ -448,9 +599,58 @@ func _refresh() -> void:
 		back.add_theme_stylebox_override("panel", _mini_box())
 		foe_hand_row.add_child(back)
 
+	foe_deck.text = "Колода: %d" % state["players"][foe]["deck"].size()
+	hint = _find_hint(me) if input_allowed() and String(state["turn"]) == me else {}
 	_rebuild_board(me)
 	_rebuild_hand(me)
+	_rebuild_history()
 	_update_sel_info(me)
+
+## Лента ходов. Таблетка показывает номер и итог хода; при взрыве мины — 💥,
+## как в веб-версии. Тап раскрывает карточку этого хода.
+func _rebuild_history() -> void:
+	for c in hist_strip.get_children():
+		c.queue_free()
+	var hist: Array = state["history"]
+	var sel_idx := hist_sel if (hist_sel >= 0 and hist_sel < hist.size()) else hist.size() - 1
+	for i in hist.size():
+		var m: Dictionary = hist[i]
+		var foe: bool = String(m["who"]) != viewer()
+		var pill := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(1, 0.33, 0.4, 0.12) if foe else Color(1, 1, 1, 0.05)
+		if i == sel_idx:
+			sb.border_color = Palette.DANGER if foe else Palette.GOLD
+			sb.set_border_width_all(2)
+		else:
+			sb.border_color = Palette.CELL_EDGE
+			sb.set_border_width_all(1)
+		sb.set_corner_radius_all(8)
+		sb.content_margin_left = 8
+		sb.content_margin_right = 8
+		sb.content_margin_top = 2
+		sb.content_margin_bottom = 2
+		pill.add_theme_stylebox_override("panel", sb)
+		pill.mouse_filter = Control.MOUSE_FILTER_STOP
+		pill.gui_input.connect(func(e: InputEvent):
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				hist_sel = i
+				_show_card(hist[i])
+				_rebuild_history()
+		)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 6)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		pill.add_child(row)
+		var n := _label(str(int(m["n"])), 10, Palette.MUTED)
+		n.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(n)
+		var pts := int(m["pts"])
+		var val := _label("💥" if bool(m["mined"]) else str(absi(pts)), 10,
+			Palette.NEG if pts < 0 else Palette.GOLD_LIGHT)
+		val.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(val)
+		hist_strip.add_child(pill)
 
 func _score_text(seat: String, kind: String, cfg: Dictionary) -> String:
 	var sc := int(state["players"][seat]["score"])
@@ -467,10 +667,11 @@ func _rebuild_board(me: String) -> void:
 	var cols := int(state["cfg"]["cols"])
 	var cell_w: float = (390.0 - 28.0 - CELL_GAP * (cols - 1)) / float(cols)
 	var valid := _valid_cells(me)
+	var hint_cell: int = int(hint.get("cell", -1)) if (not hint.is_empty() and selected == int(hint.get("hand", -1))) else -1
 	for i in state["board"].size():
 		var slot := Panel.new()
 		slot.custom_minimum_size = Vector2(cell_w, cell_w)
-		slot.add_theme_stylebox_override("panel", _cell_box(valid.has(i), state["board"][i] != null))
+		slot.add_theme_stylebox_override("panel", _cell_box(valid.has(i), state["board"][i] != null, i == hint_cell))
 		slot.mouse_filter = Control.MOUSE_FILTER_STOP
 		slot.gui_input.connect(_on_cell_input.bind(i))
 		board_grid.add_child(slot)
@@ -507,6 +708,8 @@ func _rebuild_hand(me: String) -> void:
 		hand_row.add_child(d)
 		if i == selected:
 			d.set_selected(true)
+		elif not hint.is_empty() and i == int(hint["hand"]):
+			d.play_hint()   # пульсирует, пока игрок не выбрал что-то сам
 
 func _update_sel_info(me: String) -> void:
 	if not input_allowed():
@@ -516,10 +719,16 @@ func _update_sel_info(me: String) -> void:
 	if selected >= 0:
 		var hand: Array = state["players"][me]["hand"]
 		if selected < hand.size():
+			if not hint.is_empty() and selected == int(hint["hand"]):
+				sel_info.text = "💡 Поставь на светящуюся клетку — %s +%d!" % [String(hint["name"]), int(hint["bonus"])]
+				return
 			var die: Dictionary = hand[selected]
 			var t: Dictionary = Rules.TYPES[String(die["type"])]
 			sel_info.text = "%s %d — выбери подсвеченную клетку." % [String(t["name"]), int(die["value"])]
 			return
+	if not hint.is_empty():
+		sel_info.text = "💡 Светящийся куб соберёт %s +%d!" % [String(hint["name"]), int(hint["bonus"])]
+		return
 	sel_info.text = "Выбери куб в руке."
 
 func _valid_cells(me: String) -> Array:
@@ -555,6 +764,12 @@ func _do_move(seat: String, hand_idx: int, cell_idx: int) -> void:
 	var res := MatchState.play(state, seat, hand_idx, cell_idx)
 	_refresh()
 	_animate_place(int(res["placed"]))
+	if bool(res["mined"]):
+		_boom(res["boom"])
+		toast("Мина! Ход сгорел", seat != viewer())
+	var combo: Dictionary = res["combo"]
+	if not combo.is_empty() and int(combo["bonus"]) >= 25:
+		_combo_flash()
 	await _play_card(res)
 	_after_move()
 
@@ -574,8 +789,14 @@ func _after_move() -> void:
 				busy = true
 				_show_result(title, String(final["detail"]), "Ещё раз", func(): _start_mode(String(state["mode"])))
 				return
-			var rtitle := "НИЧЬЯ В РАУНДЕ" if String(out["winner"]) == "" \
-				else MatchState.seat_name(state, String(out["winner"])).to_upper() + " БЕРЁТ РАУНД"
+			# против бота обращаемся на «ты», иначе выходит «ТЫ БЕРЁТ РАУНД»
+			var rtitle := "НИЧЬЯ В РАУНДЕ"
+			var rw := String(out["winner"])
+			if rw != "":
+				if MatchState.seat_kind(state, "e") == "bot":
+					rtitle = "РАУНД ТВОЙ!" if rw == "p" else "РАУНД ЗА ВРАГОМ"
+				else:
+					rtitle = MatchState.seat_name(state, rw).to_upper() + " БЕРЁТ РАУНД"
 			busy = true
 			_show_result(rtitle, String(out["detail"]), "Следующий раунд", func():
 				MatchState.new_round(state)
@@ -583,8 +804,10 @@ func _after_move() -> void:
 				_begin_turn(String(state["turn"]))
 			)
 		"pass":
+			toast("%s: нет ходов — пас" % MatchState.seat_name(state, String(ev["seat"])),
+				String(ev["seat"]) != viewer())
 			_refresh()
-			await get_tree().create_timer(0.7).timeout
+			await get_tree().create_timer(0.9).timeout
 			_after_move()
 		"turn":
 			await _begin_turn(String(ev["seat"]))
@@ -595,6 +818,34 @@ func _animate_place(cell_idx: int) -> void:
 	for c in board_grid.get_child(cell_idx).get_children():
 		if c is DieView:
 			c.play_place()
+
+## Карточка выбранного хода из ленты — без анимации, просто показать.
+func _show_card(record: Dictionary) -> void:
+	for c in card_box.get_children():
+		c.queue_free()
+	var panel := _panel(Palette.PANEL_2)
+	card_box.add_child(panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	panel.add_child(v)
+	var head := HBoxContainer.new()
+	v.add_child(head)
+	var seat := String(record["who"])
+	var who := MatchState.seat_name(state, seat).to_upper()
+	if seat == "p" and MatchState.seat_kind(state, "e") == "bot":
+		who = "ТВОЙ ХОД"
+	head.add_child(_label("%s · ХОД %d" % [who, int(record["n"])], 10, Palette.GOLD_LIGHT))
+	head.add_child(_grow())
+	var pts := int(record["pts"])
+	var total := _label("💥 0" if bool(record["mined"]) else str(absi(pts)), 22,
+		Palette.NEG if pts < 0 else Palette.GOLD_LIGHT, Palette.FONT_UI)
+	head.add_child(total)
+	var chips := HFlowContainer.new()
+	chips.add_theme_constant_override("h_separation", 6)
+	chips.add_theme_constant_override("v_separation", 6)
+	v.add_child(chips)
+	for p in record["parts"]:
+		chips.add_child(_chip(p))
 
 ## Карточка хода: жетоны появляются по одному, число летит из клетки в свой
 ## жетон, итог проявляется последним. Порядок важен — итог, обогнавший
@@ -618,8 +869,11 @@ func _play_card(res: Dictionary) -> void:
 	var total := _label("", 22, Palette.GOLD_LIGHT, Palette.FONT_UI)
 	total.modulate.a = 0.0
 	head.add_child(total)
-	var chips := HBoxContainer.new()
-	chips.add_theme_constant_override("separation", 6)
+	# жетоны переносятся на вторую строку: в один ряд четыре штуки не влезают и
+	# карточка вылезала за край экрана
+	var chips := HFlowContainer.new()
+	chips.add_theme_constant_override("h_separation", 6)
+	chips.add_theme_constant_override("v_separation", 6)
 	v.add_child(chips)
 
 	var parts: Array = res["parts"]
@@ -649,6 +903,93 @@ func _play_card(res: Dictionary) -> void:
 	total.add_theme_color_override("font_color", Palette.NEG if pts < 0 else Palette.GOLD_LIGHT)
 	await get_tree().create_timer(0.1).timeout
 	_pop_in(total, 1.3)
+
+## Короткое сообщение под зоной соперника: пас, взрыв, исход кона.
+func toast(text: String, foe: bool = false) -> void:
+	toast_label.text = text
+	toast_label.add_theme_color_override("font_color", Palette.NEG if foe else Palette.GOLD_LIGHT)
+
+## Баннер по центру: «РАУНД 2», «500!». Живёт полторы секунды и гаснет.
+func banner(text: String) -> void:
+	banner_label.text = text
+	var panel: Control = get_node("BannerPanel")
+	panel.scale = Vector2(0.7, 0.7)
+	panel.pivot_offset = panel.size * 0.5
+	var tw := create_tween()
+	tw.tween_property(panel, "modulate:a", 1.0, 0.12)
+	tw.parallel().tween_property(panel, "scale", Vector2(1.06, 1.06), 0.16).set_ease(Tween.EASE_OUT)
+	tw.tween_property(panel, "scale", Vector2.ONE, 0.1)
+	tw.tween_interval(0.85)
+	tw.tween_property(panel, "modulate:a", 0.0, 0.3)
+
+## Тактильный отклик. На настольных платформах ничего не делает.
+func buzz(pattern_ms: int) -> void:
+	Input.vibrate_handheld(pattern_ms)
+
+## Взрыв мины: вспышка клетки и знак поверх неё.
+func _boom(cells: Array) -> void:
+	buzz(180)
+	for ci in cells:
+		var idx := int(ci)
+		if idx < 0 or idx >= board_grid.get_child_count():
+			continue
+		var slot: Control = board_grid.get_child(idx)
+		var flash := ColorRect.new()
+		flash.color = Color(1, 0.66, 0.24, 0.9)
+		flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.add_child(flash)
+		var tw := create_tween()
+		tw.tween_property(flash, "color", Color(0.9, 0.25, 0.15, 0.0), 0.55)
+		tw.tween_callback(flash.queue_free)
+	if not cells.is_empty():
+		var first := int(cells[0])
+		if first < board_grid.get_child_count():
+			var slot2: Control = board_grid.get_child(first)
+			var mark := _label("💥", 30, Palette.GOLD_LIGHT)
+			add_child(mark)
+			mark.global_position = slot2.global_position + slot2.size * 0.5 - Vector2(18, 18)
+			mark.z_index = 110
+			var tw2 := create_tween()
+			tw2.tween_property(mark, "global_position:y", mark.global_position.y - 40.0, 0.9)
+			tw2.parallel().tween_property(mark, "modulate:a", 0.0, 0.9)
+			tw2.tween_callback(mark.queue_free)
+
+## Вспышка всей доски: комбо от фулл-хауса и выше.
+func _combo_flash() -> void:
+	buzz(60)
+	var flash := ColorRect.new()
+	flash.color = Color(1, 0.92, 0.7, 0.32)
+	flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	board_grid.add_child(flash)
+	var tw := create_tween()
+	tw.tween_property(flash, "color", Color(1, 0.92, 0.7, 0.0), 0.65)
+	tw.tween_callback(flash.queue_free)
+
+## Подсказка: куб в руке, который поднимет комбо минимум на +10, и клетка под
+## него. Помогает новичку увидеть, ради чего вообще собирать кубы.
+func _find_hint(seat: String) -> Dictionary:
+	var hand: Array = state["players"][seat]["hand"]
+	var cur := int(Rules.combo_bonus(Rules.owner_vals(state["board"], seat))["bonus"])
+	var best := {}
+	for hi in hand.size():
+		var die: Dictionary = hand[hi]
+		for ci in Rules.legal_targets(state["board"], die, seat):
+			var b := []
+			for cell in state["board"]:
+				b.append(null if cell == null else cell.duplicate())
+			var v := int(die["value"])
+			if b[ci] != null and String(die["type"]) == "warlock":
+				v = int(b[ci]["v"])
+			b[ci] = {"v": v, "type": String(die["type"]), "owner": seat, "shield": 0}
+			if String(die["type"]) == "friendly":
+				b[ci]["v"] = mini(v + Rules.neighbor_sum(b, ci, int(state["cols"]), b.size()), Rules.FRIENDLY_CAP)
+			var cb := Rules.combo_bonus(Rules.owner_vals(b, seat))
+			var gainedbonus := int(cb["bonus"]) - cur
+			if gainedbonus >= 10 and (best.is_empty() or int(cb["bonus"]) > int(best["bonus"])):
+				best = {"hand": hi, "cell": ci, "bonus": int(cb["bonus"]), "name": String(cb["name"]).replace("!", "")}
+	return best
 
 func _glow_cell(idx: int) -> void:
 	if idx < 0 or idx >= board_grid.get_child_count():
@@ -689,6 +1030,9 @@ func _shot_scenario() -> void:
 	match _shot_mode:
 		"menu":
 			pass
+		"rules":
+			_start_mode("classic")
+			rules_layer.visible = true
 		"veil":
 			second_is_human = true
 			_start_mode("classic")
@@ -779,7 +1123,7 @@ func _mode_box(pressed: bool = false) -> StyleBoxFlat:
 	sb.content_margin_bottom = 6
 	return sb
 
-func _cell_box(valid: bool, has_die: bool) -> StyleBoxFlat:
+func _cell_box(valid: bool, has_die: bool, hinted: bool = false) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Palette.CELL
 	sb.set_corner_radius_all(12)
@@ -787,6 +1131,12 @@ func _cell_box(valid: bool, has_die: bool) -> StyleBoxFlat:
 	sb.border_color = Palette.CELL_EDGE
 	if valid:
 		sb.border_color = Palette.DANGER if has_die else Palette.GOLD
+	if hinted:
+		# подсказанная клетка светится ярче остальных
+		sb.border_color = Palette.GOLD_LIGHT
+		sb.set_border_width_all(4)
+		sb.shadow_color = Color(1, 0.86, 0.45, 0.5)
+		sb.shadow_size = 8
 	return sb
 
 func _mini_box() -> StyleBoxFlat:

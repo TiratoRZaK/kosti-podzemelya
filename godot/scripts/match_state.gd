@@ -137,6 +137,15 @@ static func new_match(mode_key: String, seed_value: int, second_is_human: bool) 
 		var base := make_deck(state["rng"], 18)
 		players["p"]["deck"] = shuffled(state["rng"], base)
 		players["e"]["deck"] = shuffled(state["rng"], base)
+	# драфт: 18 кубов из 30 предложенных, у соперника та же колода. Экран выбора
+	# ещё не перенесён, поэтому набор случайный — как кнопка «Случайно» в вебе.
+	# Предложенные 30 держим в состоянии: экран драфта потом возьмёт их отсюда.
+	if String(cfg["deck"]) == "draft":
+		var offer := make_deck(state["rng"], 30)
+		state["draft_offer"] = offer
+		var picked := shuffled(state["rng"], offer).slice(0, 18)
+		players["p"]["deck"] = shuffled(state["rng"], picked)
+		players["e"]["deck"] = shuffled(state["rng"], picked)
 	new_round(state)
 	return state
 
@@ -154,6 +163,9 @@ static func new_round(state: Dictionary) -> void:
 		for seat in state["order"]:
 			state["players"][seat]["deck"] = make_deck(state["rng"], int(cfg["deck_size"]))
 			state["players"][seat]["hand"] = []
+	# драфт живёт три раунда одной колодой: доносим руку тем, что осталось
+	if String(cfg["deck"]) == "draft":
+		pass
 	# в гонке колода досыпается одинаковой партией обоим
 	if String(cfg["deck"]) == "shared" and state["players"]["p"]["deck"].size() < 6:
 		var extra := make_deck(state["rng"], 18)
