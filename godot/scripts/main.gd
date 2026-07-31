@@ -13,6 +13,7 @@ extends Control
 const CELL_GAP := 9
 const HAND_PX := 74
 const BOT_DELAY := 0.7
+const BG_TEXTURE := "res://assets/bg/dungeon_bg.png"
 
 var state: Dictionary
 var rng := RandomNumberGenerator.new()
@@ -89,12 +90,32 @@ func _build_ui() -> void:
 	bg.color = Palette.BG
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
+	# Каменная кладка как фактура. Сгенерированная картинка сама по себе слишком
+	# светлая и однородная — белый текст на ней читается хуже, чем на заливке.
+	# Поэтому она идёт приглушённой, а сверху ложатся световое пятно и виньетка:
+	# фактура видна, но интерфейс остаётся главным.
+	if ResourceLoader.exists(BG_TEXTURE):
+		var wall := TextureRect.new()
+		wall.texture = load(BG_TEXTURE)
+		wall.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		wall.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		wall.modulate = Color(0.66, 0.6, 0.82, 0.85)
+		add_child(wall)
+		var shade := ColorRect.new()
+		shade.color = Color(0.05, 0.03, 0.09, 0.42)
+		shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		add_child(shade)
 	var glow := TextureRect.new()
 	glow.texture = _radial_glow()
 	glow.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	glow.stretch_mode = TextureRect.STRETCH_SCALE
-	glow.modulate = Color(1, 1, 1, 0.5)
+	glow.modulate = Color(1, 1, 1, 0.55)
 	add_child(glow)
+	var vign := TextureRect.new()
+	vign.texture = _vignette()
+	vign.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vign.stretch_mode = TextureRect.STRETCH_SCALE
+	add_child(vign)
 
 	var pad := MarginContainer.new()
 	pad.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -811,6 +832,21 @@ func _stars(n: int) -> String:
 	for i in 2:
 		s += "★" if i < n else "☆"
 	return s
+
+## Виньетка: к краям темнее. Держит взгляд в центре и глушит кладку по углам.
+func _vignette() -> Texture2D:
+	var g := Gradient.new()
+	g.set_color(0, Color(0, 0, 0, 0))
+	g.set_color(1, Color(0.02, 0.01, 0.04, 0.85))
+	g.add_point(0.55, Color(0, 0, 0, 0.05))
+	var t := GradientTexture2D.new()
+	t.gradient = g
+	t.fill = GradientTexture2D.FILL_RADIAL
+	t.fill_from = Vector2(0.5, 0.45)
+	t.fill_to = Vector2(1.15, 1.05)
+	t.width = 256
+	t.height = 256
+	return t
 
 func _radial_glow() -> Texture2D:
 	var g := Gradient.new()
