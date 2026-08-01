@@ -13,7 +13,10 @@ signal pressed(die_view: DieView)
 const SHADER_PATH := "res://assets/shaders/die.gdshader"
 ## Щит рисуем картинкой, а не эмодзи и не рамкой: рамка по контуру куба читалась
 ## как наклеенная деталь, а мелкий значок 🛡 в углу терялся.
-const SHIELD_ICON := "res://assets/icons/icon_shield.png"
+## Значок способности рисует AbilityMark: сгенерированные картинки годятся для
+## правил (44 px), а на кубе они по 24-30 px — рукопожатие превращалось в палочку,
+## сфера в мутное пятно. Эмодзи не годятся тем же, чем не годились для мастей.
+const ABILITY_KINDS := ["shield", "spikes", "mine", "jaw", "friendly", "warlock"]
 
 var value: int = 1
 var type_id: String = "basic"
@@ -34,7 +37,7 @@ var _mat: ShaderMaterial
 var _value_label: Label
 var _badge_label: Label
 var _pips: Control
-var _shield_icon: TextureRect
+var _ability_mark: AbilityMark
 
 func _ready() -> void:
 	# mouse_filter здесь не задаём: им управляет clickable, и жёсткая установка
@@ -68,15 +71,10 @@ func _build() -> void:
 	_badge_label.add_theme_constant_override("shadow_offset_y", 1)
 	add_child(_badge_label)
 
-	# щит поверх грани: сам знак способности
-	_shield_icon = TextureRect.new()
-	_shield_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_shield_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_shield_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_shield_icon.visible = false
-	if ResourceLoader.exists(SHIELD_ICON):
-		_shield_icon.texture = load(SHIELD_ICON)
-	add_child(_shield_icon)
+	# знак способности поверх грани
+	_ability_mark = AbilityMark.new()
+	_ability_mark.visible = false
+	add_child(_ability_mark)
 
 	_pips = Control.new()
 	_pips.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -108,11 +106,12 @@ func _apply() -> void:
 	_mat.set_shader_parameter("shielded", 1.0 if shield_charges > 0 else 0.0)
 	_value_label.text = str(value)
 	_value_label.add_theme_color_override("font_color", f["ink"])
-	var icon := String(Rules.TYPES[type_id]["icon"])
-	# у щита свой рисунок, поэтому эмодзи-значок ему не нужен
-	var is_shield := type_id == "shield"
-	_badge_label.text = "" if (is_shield or not show_badge) else icon
-	_shield_icon.visible = show_badge and (is_shield or shield_charges > 0)
+	var drawn: bool = ABILITY_KINDS.has(type_id)
+	if drawn:
+		# знак берёт цвет чернил грани: на кости тёмный, на крови светлый
+		_ability_mark.setup(type_id, f["ink"])
+	_badge_label.text = "" if (drawn or not show_badge) else String(Rules.TYPES[type_id]["icon"])
+	_ability_mark.visible = show_badge and drawn
 	_pips.queue_redraw()
 
 func _sync_size() -> void:
@@ -128,9 +127,10 @@ func _sync_size() -> void:
 	_badge_label.position = Vector2(size.x - bs * 1.35, size.y * 0.06)
 	# щит крупный, в правом верхнем углу грани: он должен читаться и на мелком
 	# кубе в руке, поэтому занимает больше места, чем эмодзи-значок
-	var sh := size.y * 0.38
-	_shield_icon.size = Vector2(sh, sh)
-	_shield_icon.position = Vector2(size.x - sh - size.x * 0.04, size.y * 0.035)
+	var sh := size.y * 0.3
+	_ability_mark.size = Vector2(sh, sh)
+	_ability_mark.position = Vector2(size.x - sh - size.x * 0.06, size.y * 0.06)
+	_ability_mark.queue_redraw()
 	_pips.position = Vector2.ZERO
 	_pips.size = size
 	_pips.queue_redraw()
@@ -189,11 +189,15 @@ func _draw_pips() -> void:
 	var r := maxf(2.0, size.y * 0.032)
 	var gap := r * 2.6
 	var total := gap * (Rules.SHIELD_CHARGES - 1)
-	var sh := size.y * 0.38
-	var cx := size.x - sh * 0.5 - size.x * 0.04
-	var cy := size.y * 0.035 + sh * 1.02
+	var sh := size.y * 0.3
+	var cx := size.x - sh * 0.5 - size.x * 0.06
+	var cy := size.y * 0.06 + sh * 1.15
 	for i in Rules.SHIELD_CHARGES:
 		var col := Palette.CYAN
 		if i >= shield_charges:
-			col.a = 0.25
-		_pips.draw_circle(Vector2(cx - total * 0.5 + gap * i, cy), r, col)
+			col = Color(0.16, 0.11, 0.2, 0.75)     # погашенный: тёмная лунка, а не блёклая точка
+		var at := Vector2(cx - total * 0.5 + gap * i, cy)
+		# тёмная обводка: бирюза на костяной грани давала контраст 1.48:1 и точки
+		# сливались с кубом — сосчитать заряды было нельзя
+		_pips.draw_circle(at, r + maxf(1.5, r * 0.5), Color(0.04, 0.02, 0.07, 0.9))
+		_pips.draw_circle(at, r, col)

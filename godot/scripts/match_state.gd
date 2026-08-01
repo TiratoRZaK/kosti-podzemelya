@@ -189,8 +189,13 @@ static func new_round(state: Dictionary) -> void:
 	# драфт живёт три раунда одной колодой: доносим руку тем, что осталось
 	if String(cfg["deck"]) == "draft":
 		pass
-	# в гонке колода досыпается одинаковой партией обоим
-	if String(cfg["deck"]) == "shared" and state["players"]["p"]["deck"].size() < 6:
+	# В гонке колода досыпается одинаковой партией обоим. Смотреть надо на того,
+	# у кого меньше: раньше проверялся только первый игрок, и второй мог остаться
+	# без кубов, пока у первого колода ещё не подошла к концу.
+	var thinnest := 1 << 30
+	for seat in state["order"]:
+		thinnest = mini(thinnest, state["players"][seat]["deck"].size())
+	if String(cfg["deck"]) == "shared" and thinnest < 6:
 		var extra := make_deck(state["rng"], 18)
 		for seat in state["order"]:
 			var d: Array = state["players"][seat]["deck"]

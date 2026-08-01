@@ -12,8 +12,8 @@ const BG            := Color("0e0a14")
 const BG_TOP        := Color("1b1229")
 const PANEL         := Color("1c1428")
 const PANEL_2       := Color("241a33")
-const CELL          := Color("241b36")
-const CELL_EDGE     := Color("392a52")
+const CELL          := Color("1a1226")   # темнее панели: клетка читается как гнездо
+const CELL_EDGE     := Color("56407f")   # 2.0:1 к фону: пустое поле видно, но не спорит с кубами
 
 const BONE          := Color("ead9b6")
 const BONE_HI       := Color("fff5da")
@@ -34,7 +34,7 @@ const CYAN          := Color("62c3c9")
 const DANGER        := Color("e14b4b")
 const NEG           := Color("ff8a7e")
 const TEXT          := Color("e8e0d0")
-const MUTED         := Color("8d81a3")
+const MUTED         := Color("a99cc0")   # 6.95:1: подписи в 9-10 px раньше тонули
 
 const FONT_TITLE := "res://assets/fonts/RuslanDisplay-Regular.ttf"
 const FONT_UI    := "res://assets/fonts/Manrope-Bold.ttf"

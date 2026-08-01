@@ -38,7 +38,7 @@ var pending_next_round := false  # хост открыл раунд, пока м
 # узлы
 var foe_name: Label
 var foe_score: Label
-var foe_hearts: Label
+var foe_hearts: LifeRow
 var foe_hand_row: HBoxContainer
 var turn_info: Label
 var turn_who: Label
@@ -56,7 +56,7 @@ var hint: Dictionary = {}   # подсказка: какой куб и куда 
 var hand_row: HBoxContainer
 var my_name: Label
 var my_score: Label
-var my_hearts: Label
+var my_hearts: LifeRow
 var my_deck: Label
 var menu_layer: Control
 var veil_layer: Control
@@ -131,7 +131,10 @@ func _report_boot() -> void:
 	if boot_note == null:
 		return
 	var ui := Time.get_ticks_msec() - _boot_ms
-	boot_note.text = "запуск: движок %d мс · интерфейс %d мс" % [_boot_ms, ui]
+	# игроку показываем, только если запуск был ненормально долгим: в обычной
+	# партии эта строка — мусор на экране, а при 40 секундах ожидания она объясняет,
+	# куда ушло время
+	boot_note.text = "запуск: движок %d мс · интерфейс %d мс" % [_boot_ms, ui] if _boot_ms > 5000 else ""
 	print("[boot] движок=%d мс интерфейс=%d мс" % [_boot_ms, ui])
 
 ## Вернуть экран на место. Тряска двигает контейнер, и если её оборвало сменой
@@ -350,9 +353,9 @@ func _build_ui() -> void:
 	# лента ходов: таблетки с номером и итогом, тап раскрывает нужную карточку
 	hist_strip = HBoxContainer.new()
 	hist_strip.add_theme_constant_override("separation", 6)
-	hist_strip.custom_minimum_size.y = 26
+	hist_strip.custom_minimum_size.y = 40
 	var strip_scroll := ScrollContainer.new()
-	strip_scroll.custom_minimum_size.y = 30
+	strip_scroll.custom_minimum_size.y = 44
 	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	strip_scroll.add_child(hist_strip)
@@ -433,10 +436,11 @@ func _foe_zone() -> Control:
 	panel.add_child(v)
 	var row := HBoxContainer.new()
 	v.add_child(row)
-	foe_name = _label("", 10, Palette.MUTED)
+	foe_name = _label("", 12, Palette.MUTED)
 	row.add_child(foe_name)
 	row.add_child(_grow())
-	foe_hearts = _label("", 15, Palette.DANGER)
+	foe_hearts = LifeRow.new()
+	foe_hearts.setup(Rules.LIVES_MAX, Rules.LIVES_MAX)
 	row.add_child(foe_hearts)
 	row.add_child(_grow())
 	foe_score = _label("0", 20, Palette.GOLD_LIGHT, Palette.FONT_UI)
@@ -447,16 +451,16 @@ func _foe_zone() -> Control:
 	foe_hand_row.add_theme_constant_override("separation", 6)
 	row2.add_child(foe_hand_row)
 	row2.add_child(_grow())
-	foe_deck = _label("", 10, Palette.MUTED)
+	foe_deck = _label("", 11, Palette.MUTED)
 	row2.add_child(foe_deck)
 	return panel
 
 func _turn_bar() -> Control:
 	var row := HBoxContainer.new()
-	turn_info = _label("", 10, Palette.MUTED)
+	turn_info = _label("", 12, Palette.MUTED)
 	row.add_child(turn_info)
 	row.add_child(_grow())
-	turn_who = _label("", 10, Palette.GOLD_LIGHT)
+	turn_who = _label("", 12, Palette.GOLD_LIGHT)
 	row.add_child(turn_who)
 	return row
 
@@ -467,10 +471,11 @@ func _my_zone() -> Control:
 	panel.add_child(v)
 	var row := HBoxContainer.new()
 	v.add_child(row)
-	my_name = _label("", 10, Palette.MUTED)
+	my_name = _label("", 12, Palette.MUTED)
 	row.add_child(my_name)
 	row.add_child(_grow())
-	my_hearts = _label("", 15, Palette.DANGER)
+	my_hearts = LifeRow.new()
+	my_hearts.setup(Rules.LIVES_MAX, Rules.LIVES_MAX)
 	row.add_child(my_hearts)
 	row.add_child(_grow())
 	my_score = _label("0", 20, Palette.GOLD_LIGHT, Palette.FONT_UI)
@@ -482,7 +487,7 @@ func _my_zone() -> Control:
 	v.add_child(hand_row)
 	var bottom := HBoxContainer.new()
 	v.add_child(bottom)
-	my_deck = _label("", 10, Palette.MUTED)
+	my_deck = _label("", 11, Palette.MUTED)
 	bottom.add_child(my_deck)
 	bottom.add_child(_grow())
 	var rules_btn := _button("Правила", true)
@@ -2012,14 +2017,18 @@ func _refresh() -> void:
 	my_score.add_theme_color_override("font_color",
 		Palette.NEG if int(state["players"][me]["score"]) < 0 else Palette.GOLD_LIGHT)
 	if kind == "lives":
-		my_hearts.text = _hearts(int(state["players"][me]["lives"]))
-		foe_hearts.text = _hearts(int(state["players"][foe]["lives"]))
+		my_hearts.setup(Rules.LIVES_MAX, int(state["players"][me]["lives"]))
+		foe_hearts.setup(Rules.LIVES_MAX, int(state["players"][foe]["lives"]))
+		my_hearts.visible = true
+		foe_hearts.visible = true
 	elif kind == "bo3":
-		my_hearts.text = _stars(int(state["players"][me]["wins"]))
-		foe_hearts.text = _stars(int(state["players"][foe]["wins"]))
+		my_hearts.setup(2, int(state["players"][me]["wins"]), LifeRow.KIND_STAR, Palette.GOLD)
+		foe_hearts.setup(2, int(state["players"][foe]["wins"]), LifeRow.KIND_STAR, Palette.GOLD)
+		my_hearts.visible = true
+		foe_hearts.visible = true
 	else:
-		my_hearts.text = ""
-		foe_hearts.text = ""
+		my_hearts.visible = false
+		foe_hearts.visible = false
 	my_deck.text = "Колода: %d" % state["players"][me]["deck"].size()
 	var turn := String(state["turn"])
 	var move_no: int = mini(int(state["players"][turn]["moves"]) + 1, int(cfg["moves"]))
@@ -2069,9 +2078,10 @@ func _rebuild_history() -> void:
 		sb.set_corner_radius_all(8)
 		sb.content_margin_left = 8
 		sb.content_margin_right = 8
-		sb.content_margin_top = 2
-		sb.content_margin_bottom = 2
+		sb.content_margin_top = 8
+		sb.content_margin_bottom = 8
 		pill.add_theme_stylebox_override("panel", sb)
+		pill.custom_minimum_size.y = 40      # попасть пальцем в 22 px невозможно
 		pill.mouse_filter = Control.MOUSE_FILTER_STOP
 		pill.gui_input.connect(func(e: InputEvent):
 			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
@@ -3165,7 +3175,8 @@ func _button(text: String, ghost: bool = false) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_font_size_override("font_size", 13)
-	b.custom_minimum_size.y = 40 if not ghost else 32
+	# 44 и 40: пальцем в 32 px попадать неудобно, а промах по «Меню» уводит из партии
+	b.custom_minimum_size.y = 44 if not ghost else 40
 	var sb := StyleBoxFlat.new()
 	if ghost:
 		sb.bg_color = Color(1, 1, 1, 0.05)
@@ -3208,16 +3219,19 @@ func _mode_box(pressed: bool = false) -> StyleBoxFlat:
 	sb.set_corner_radius_all(10)
 	sb.border_color = Palette.CELL_EDGE
 	sb.set_border_width_all(2)
-	sb.content_margin_left = 10
-	sb.content_margin_top = 6
-	sb.content_margin_bottom = 6
+	sb.content_margin_left = 12
+	sb.content_margin_right = 12      # без него подпись упиралась в рамку буква в букву
+	sb.content_margin_top = 8
+	sb.content_margin_bottom = 8
 	return sb
 
 func _cell_box(valid: bool, has_die: bool, hinted: bool = false) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Palette.CELL
 	sb.set_corner_radius_all(12)
-	sb.set_border_width_all(3)
+	# тонкая рамка у свободной клетки и толстая у подсвеченной: раньше все клетки
+	# были обведены одинаково жирно и доска читалась как сетка, а не как поле
+	sb.set_border_width_all(2)
 	sb.border_color = Palette.CELL_EDGE
 	if valid:
 		sb.border_color = Palette.DANGER if has_die else Palette.GOLD
@@ -3260,18 +3274,6 @@ func _chip(part: Dictionary) -> Control:
 		var neg: bool = bool(part.get("neg", false))
 		row.add_child(_label(str(int(part["v"])), 12, Palette.NEG if neg else Palette.GOLD_LIGHT))
 	return box
-
-func _hearts(n: int) -> String:
-	var s := ""
-	for i in Rules.LIVES_MAX:
-		s += "♥" if i < n else "♡"
-	return s
-
-func _stars(n: int) -> String:
-	var s := ""
-	for i in 2:
-		s += "★" if i < n else "☆"
-	return s
 
 ## Виньетка: к краям темнее. Держит взгляд в центре и глушит кладку по углам.
 func _vignette() -> Texture2D:

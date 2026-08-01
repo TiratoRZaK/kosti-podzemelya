@@ -660,7 +660,9 @@ function newRound(){
     S.pDeck=makeDeck(S.cfg.deckSize); S.eDeck=makeDeck(S.cfg.deckSize);
     S.pHand=[]; S.eHand=[];
   }
-  if(S.cfg.deck==='shared'&&S.pDeck.length<6){
+  // досыпаем, когда кончается у любого: раньше смотрели только на первого, и
+  // второй мог остаться без кубов
+  if(S.cfg.deck==='shared'&&Math.min(S.pDeck.length,S.eDeck.length)<6){
     var extra=makeDeck(18); // общая добавка — одинаковая у обоих
     S.pDeck=shuffle(copyDice(extra)).concat(S.pDeck);
     S.eDeck=shuffle(copyDice(extra)).concat(S.eDeck);
@@ -1035,6 +1037,19 @@ function botTurn(){
 
 /* ---------------- Дуракуб ---------------- */
 var SUITS=['♠','♥','♦','♣'];
+// Первым атакует владелец младшего козыря — как в картах. Раньше начинал всегда
+// первый игрок, а начинать в дураке невыгодно: на прогонах он проигрывал 42%
+// против 55%. Козырей нет ни у кого — начинает тот, у кого младший куб.
+function firstAttacker(){
+  var best=null, bestRank=1e9;
+  S.order.forEach(function(o){
+    handOf(o).forEach(function(d){
+      var rank=d.value+(d.suit===S.trump?0:100);
+      if(rank<bestRank){bestRank=rank; best=o;}
+    });
+  });
+  return best||S.order[0];
+}
 function initDurak(key){
   var cfg=MODES[key];
   var order=['p','e'];
@@ -1048,6 +1063,7 @@ function initDurak(key){
   $('whoBottom').textContent=seatName('p');
   S.trump=S.talon[0].suit; // нижний куб колоды — козырь
   for(var i=0;i<6;i++){S.pHand.push(S.talon.pop()); S.eHand.push(S.talon.pop());}
+  S.attacker=firstAttacker(); // младший козырь ходит первым, как в картах
   $('modeTag').textContent=cfg.title.toLowerCase();
   toast('Козырь: '+SUITS[S.trump]);
   banner('КОЗЫРЬ '+SUITS[S.trump]);
