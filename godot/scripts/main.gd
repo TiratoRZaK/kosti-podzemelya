@@ -21,10 +21,19 @@ var opponent := "bot"            # bot | human (хотсит) | remote (по с�
 var my_seat := "p"               # своё сиденье: у клиента по сети — второе
 var foe_player := "Соперник"     # имя соперника, приходит по сети при знакомстве
 var lan: Lan
+var foe_left := false            # соперник вышел сам — гасит «СВЯЗЬ ПОТЕРЯНА» вдогонку
 var lobby_layer: Control
 var lobby_box: VBoxContainer
 var selected := -1
 var busy := false
+
+# Годо-аналог S.token и schedule() веб-прототипа: паузы (пас-таймер, раздумье
+# бота, фанфара) переживают смену партии, и отложенное продолжение двигало бы
+# уже другой матч. Перед каждым игровым await запоминаем токен, после — сверяем.
+var flow_token := 0
+var net_moves: Array = []        # ходы соперника, пришедшие раньше, чем поток до них дошёл
+var waiting_remote := false      # поток остановился и ждёт ход соперника из сети
+var pending_next_round := false  # хост открыл раунд, пока мы ещё доигрывали свой
 
 # узлы
 var foe_name: Label
@@ -234,6 +243,8 @@ func _parse_args() -> void:
 			_shot_mode = "net_client"
 		elif a == "--shot-net-round":
 			_shot_mode = "net_round"
+		elif a == "--shot-net-rematch":
+			_shot_mode = "net_rematch"
 		elif a == "--shot-durak-take":
 			_shot_mode = "durak_take"
 		elif a == "--shot-durak-lose":
@@ -265,7 +276,7 @@ func viewer() -> String:
 	return my_seat
 
 func input_allowed() -> bool:
-	if state.is_empty() or busy or veil_layer.visible or menu_layer.visible:
+	if state.is_empty() or busy or veil_layer.visible or menu_layer.visible or over_layer.visible:
 		return false
 	var t := String(state["turn"])
 	return MatchState.seat_is_human(state, t) and MatchState.seat_local(state, t) \
@@ -884,6 +895,7 @@ func _d_update_hint(me: String, valid: Array) -> void:
 ## seed_value < 0 — партию начинаем сами и, если играем по сети, объявляем сид
 ## сопернику; иначе сид пришёл от хоста и раздача у обоих совпадёт.
 func _start_durak(seed_value: int = -1) -> void:
+	_new_flow()
 	_reset_shift()
 	menu_layer.visible = false
 	over_layer.visible = false
@@ -1551,6 +1563,7 @@ func _ensure_lan() -> void:
 	lan.match_started.connect(_on_lan_match_started)
 	lan.move_received.connect(_on_lan_move)
 	lan.next_round_received.connect(_on_lan_next_round)
+	lan.match_left.connect(_on_lan_left)
 	lan.durak_action_received.connect(_on_lan_durak_action)
 	lan.peer_named.connect(_on_lan_peer_named)
 
@@ -1605,6 +1618,7 @@ func _on_lan_peer_named(name_of_peer: String) -> void:
 	_refresh_screen()
 
 func _on_lan_connected() -> void:
+	foe_left = false
 	lan.send_hello()          # обе стороны сразу представляются
 	if lan.is_host:
 		# хост выбирает режим; клиент ждёт объявления партии
@@ -1618,44 +1632,76 @@ func _on_lan_connected() -> void:
 		_lobby_message("Подключились! Ждём, пока хост выберет режим…", false)
 
 func _on_lan_lost() -> void:
+	# соперник вышел сам — «СОПЕРНИК ВЫШЕЛ» уже показан, обрыв связи вдогонку
+	# не должен перекрывать его окном «СВЯЗЬ ПОТЕРЯНА»
+	if foe_left:
+		return
+	# отложенные шаги прежней партии не должны шевелить состояние под оверлеем
+	_new_flow()
 	if state.is_empty() and d_state.is_empty():
 		_lobby_message("Соперник отключился.")
 	else:
 		busy = true
 		_show_result("СВЯЗЬ ПОТЕРЯНА", "Соперник отключился.", "В меню", _show_menu)
 
+func _on_lan_left() -> void:
+	# сами уже вышли (встречное «вышел») или партия не сетевая — просто прибрать
+	if not lan.connected or opponent != "remote":
+		lan.stop.call_deferred()
+		return
+	foe_left = true
+	_new_flow()
+	# связь закрываем отложенно: сигнал пришёл изнутри опроса сети, выдёргивать
+	# пир прямо под ним не стоит
+	lan.stop.call_deferred()
+	if state.is_empty() and d_state.is_empty():
+		_lobby_message("Соперник вышел.")
+		return
+	busy = true
+	_show_result("СОПЕРНИК ВЫШЕЛ", "Соперник покинул партию.", "В меню", _show_menu)
+
 func _on_lan_match_started(mode: String, seed_value: int) -> void:
 	# клиент собирает ту же партию из присланного сида
 	lobby_layer.visible = false
-	menu_layer.visible = false
 	opponent = "remote"
 	if mode == "durak":
 		await _start_durak(seed_value)
 		return
-	in_durak = false
-	d_state = {}
-	durak_layer.visible = false
-	battle_root.visible = true
-	state = MatchState.new_match(mode, seed_value, "remote", my_seat, foe_player, Profile.display_name())
-	board_grid.columns = int(state["cfg"]["cols"])
-	hist_sel = -1
-	mode_tag.text = String(state["cfg"]["title"]).to_upper()
-	for c in card_box.get_children():
-		c.queue_free()
-	toast("")
-	_refresh()
-	banner("РАУНД %d" % int(state["round"]))
-	_begin_turn(String(state["turn"]))
+	_launch_match(mode, seed_value)
 
 func _on_lan_move(seat: String, hand_idx: int, cell_idx: int) -> void:
-	# ход соперника прилетел данными и применяется той же логикой
-	if state.is_empty():
+	# ход соперника прилетел данными и применяется той же логикой, но не сразу:
+	# пока идёт анимация или пас-таймер, advance ещё не передал ход сопернику, и
+	# немедленный _do_move продвинул бы счётчики дважды — дальше раунды и жизни
+	# закрываются в разное время и матчи расходятся
+	if state.is_empty() or bool(state["over"]):
 		return
-	await _do_move(seat, hand_idx, cell_idx, false)
+	net_moves.append({"seat": seat, "hand": hand_idx, "cell": cell_idx})
+	_try_net_move()
+
+## Отложенный ход соперника применяется, когда поток дошёл до его ожидания.
+func _try_net_move() -> void:
+	if not waiting_remote or net_moves.is_empty():
+		return
+	waiting_remote = false
+	var mv: Dictionary = net_moves.pop_front()
+	_do_move(String(mv["seat"]), int(mv["hand"]), int(mv["cell"]), false)
 
 func _on_lan_next_round() -> void:
 	if state.is_empty():
 		return
+	# свой раунд ещё доигрывается (анимация финального хода, фанфара) — новый
+	# начнём, когда цепочка сама закроет раунд: иначе new_round затёр бы доску до
+	# close_round, жизнь осталась бы не списанной и счёт разошёлся бы с хостом
+	if not over_layer.visible:
+		pending_next_round = true
+		return
+	_next_round()
+
+## Открыть следующий раунд. У хоста — по кнопке «Следующий раунд», у клиента —
+## по сообщению сети; тело одно, чтобы экраны не расходились.
+func _next_round() -> void:
+	_new_flow()
 	over_layer.visible = false
 	MatchState.new_round(state)
 	hist_sel = -1
@@ -1774,6 +1820,12 @@ func _build_overlay() -> Control:
 # ----------------------------------------------------------------- меню
 
 func _show_menu() -> void:
+	_new_flow()
+	# уход в меню — выход из сетевой партии: сопернику уходит «вышел», связь
+	# закрывается внутри send_leave вежливым разрывом. Без этого соперник
+	# оставался на «Ждём хоста…» или ждал хода до конца времён.
+	if opponent == "remote" and lan != null and lan.connected:
+		lan.send_leave()
 	_reset_shift()
 	menu_layer.visible = true
 	veil_layer.visible = false
@@ -1792,10 +1844,29 @@ func _show_rules() -> void:
 	rules_layer.visible = true
 	_hide_banner()
 
+## Начинается новая партия, раунд или меню: всё отложенное от прежнего потока —
+## таймеры пасов, раздумье бота, недоигранные фанфары — сгорает по токену.
+func _new_flow() -> void:
+	flow_token += 1
+	net_moves.clear()
+	waiting_remote = false
+	pending_next_round = false
+
 func _start_mode(key: String) -> void:
 	if key == "durak":
 		await _start_durak()
 		return
+	var seed_value := int(Time.get_unix_time_from_system()) & 0x7fffffff
+	if opponent == "remote" and lan != null and lan.is_host:
+		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
+	_launch_match(key, seed_value)
+
+## Общий хвост запуска боевой партии: у хоста и одиночки из _start_mode, у
+## клиента из _on_lan_match_started. Раньше клиент собирал партию своей копией
+## этого кода, и в ней не гасился оверлей исхода: после «Ещё раз» у хоста клиент
+## смотрел на «Ждём хоста…» поверх уже идущей новой партии.
+func _launch_match(key: String, seed_value: int) -> void:
+	_new_flow()
 	_reset_shift()
 	menu_layer.visible = false
 	over_layer.visible = false
@@ -1804,9 +1875,6 @@ func _start_mode(key: String) -> void:
 	durak_layer.visible = false
 	battle_root.visible = true
 	selected = -1
-	var seed_value := int(Time.get_unix_time_from_system()) & 0x7fffffff
-	if opponent == "remote" and lan != null and lan.is_host:
-		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
 	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name())
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
@@ -1822,15 +1890,19 @@ func _start_mode(key: String) -> void:
 ## позже добавляется сюда же — ещё одной ветвью по типу сиденья.
 func _begin_turn(seat: String) -> void:
 	selected = -1
+	var tok := flow_token
 	if MatchState.seat_kind(state, seat) == "remote":
 		busy = true
 		_refresh()
+		# ход мог прийти раньше, чем мы досмотрели свою анимацию — забираем из очереди
+		waiting_remote = true
+		_try_net_move()
 		return
 	if MatchState.seat_kind(state, seat) == "bot":
 		busy = true
 		_refresh()
 		await get_tree().create_timer(BOT_DELAY).timeout
-		if state.is_empty():
+		if state.is_empty() or tok != flow_token:
 			return
 		var mv := Bot.choose_move(state, seat, rng)
 		if mv.is_empty():
@@ -2146,6 +2218,7 @@ func _on_cell_input(event: InputEvent, idx: int) -> void:
 # -------------------------------------------------------------------- ход
 
 func _do_move(seat: String, hand_idx: int, cell_idx: int, broadcast: bool = true) -> void:
+	var tok := flow_token
 	busy = true
 	selected = -1
 	# по сети уходит сам ход, а не состояние: три числа вместо всей доски
@@ -2168,9 +2241,12 @@ func _do_move(seat: String, hand_idx: int, cell_idx: int, broadcast: bool = true
 			_combo_flash()
 			_shake(4.0, 0.2)
 	await _play_card(res)
+	if tok != flow_token:
+		return
 	_after_move()
 
 func _after_move() -> void:
+	var tok := flow_token
 	var ev := MatchState.advance(state)
 	match String(ev["event"]):
 		"round_end":
@@ -2186,23 +2262,25 @@ func _after_move() -> void:
 			busy = true
 			var rp := _round_phrases(String(out["winner"]), String(out["detail"]))
 			await _round_fanfare(String(out["winner"]), String(out["detail"]))
+			if tok != flow_token:
+				return
+			# хост успел открыть следующий раунд, пока у нас шла фанфара — не
+			# показываем исход поверх новой доски, а сразу догоняем
+			if pending_next_round:
+				_next_round()
+				return
 			_show_result(String(rp["title"]), String(rp["text"]), "Следующий раунд", func():
 				if opponent == "remote" and lan != null and lan.connected:
 					lan.send_next_round()
-				MatchState.new_round(state)
-				hist_sel = -1
-				for c in card_box.get_children():
-					c.queue_free()
-				toast("")
-				_refresh()
-				banner("РАУНД %d" % int(state["round"]))
-				_begin_turn(String(state["turn"]))
+				_next_round()
 			)
 		"pass":
 			toast("%s: нет ходов — пас" % MatchState.seat_name(state, String(ev["seat"])),
 				String(ev["seat"]) != viewer())
 			_refresh()
 			await get_tree().create_timer(0.9).timeout
+			if tok != flow_token:
+				return
 			_after_move()
 		"turn":
 			await _begin_turn(String(ev["seat"]))
@@ -2956,6 +3034,18 @@ func _shot_scenario() -> void:
 			state["turn"] = "e"
 			selected = 0
 			_refresh()
+			await get_tree().process_frame
+		"net_rematch":
+			# клиент на оверлее поражения получает объявление новой партии от
+			# хоста: оверлей обязан погаснуть — на кадре свежая доска раунда 1,
+			# а не «Ждём хоста…» поверх уже идущей игры
+			opponent = "remote"
+			my_seat = "e"
+			_start_mode("classic")
+			busy = true
+			_show_result("ПОРАЖЕНИЕ", "Ты остался без жизней.", "Ещё раз", func(): pass)
+			_on_lan_match_started("classic", 999)
+			print("оверлей исхода после рестарта: ", over_layer.visible)
 			await get_tree().process_frame
 		"net_round":
 			# исход раунда по сети: раньше выходило «Ты теряет ♥»

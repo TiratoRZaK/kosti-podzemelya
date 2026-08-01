@@ -22,6 +22,11 @@ func _init() -> void:
 	pass_case()
 
 	print("")
+	print("--- исход матча ---")
+	print("")
+	over_case()
+
+	print("")
 	print("--- матч от начала до конца ---")
 	print("")
 	full_match_case("classic")
@@ -95,6 +100,43 @@ func pass_case() -> void:
 		"событие=%s seat=%s | экран у=%s | в истории=%s" % [
 			String(ev["event"]), String(ev.get("seat", "")), String(s["shown_to"]),
 			String(s["history"][-1]["parts"][0]["t"])])
+
+## Конец матча помечает состояние: close_round выставляет over, а advance после
+## этого молчит. Без guard'а устаревший таймер интерфейса (пас, фанфара) звал
+## advance по закрытому состоянию, получал повторный round_end — и close_round
+## списывал вторую жизнь: по сети стороны расходились, у кого матч кончился.
+func over_case() -> void:
+	# середина матча: раунд закрыт, жизни ещё есть
+	var s := MatchState.new_match("classic", 111, "bot")
+	s["players"]["p"]["score"] = 10
+	for seat in s["order"]:
+		s["players"][seat]["moves"] = int(s["cfg"]["moves"])
+	var out := MatchState.close_round(s)
+	var mid_ok: bool = String(out["winner"]) == "p" and int(s["players"]["e"]["lives"]) == 2 \
+		and not bool(out["match_over"]) and not bool(s["over"])
+	check(mid_ok, "close_round в середине матча не помечает состояние конченым",
+		"победитель=%s жизни e=%d over=%s" % [String(out["winner"]),
+			int(s["players"]["e"]["lives"]), str(s["over"])])
+
+	# конец матча: у соперника последняя жизнь
+	var f := MatchState.new_match("classic", 111, "bot")
+	f["players"]["p"]["score"] = 10
+	f["players"]["e"]["lives"] = 1
+	for seat in f["order"]:
+		f["players"][seat]["moves"] = int(f["cfg"]["moves"])
+	var fin := MatchState.close_round(f)
+	var end_ok: bool = bool(fin["match_over"]) and bool(f["over"]) and int(f["players"]["e"]["lives"]) == 0
+	check(end_ok, "close_round в конце матча выставляет over",
+		"match_over=%s over=%s жизни e=%d" % [str(fin["match_over"]), str(f["over"]),
+			int(f["players"]["e"]["lives"])])
+
+	var turn_before := String(f["turn"])
+	var moves_before := int(f["players"]["p"]["moves"])
+	var ev := MatchState.advance(f)
+	var guard_ok: bool = String(ev["event"]) == "over" and String(f["turn"]) == turn_before \
+		and int(f["players"]["p"]["moves"]) == moves_before
+	check(guard_ok, "advance после конца матча возвращает over и не трогает состояние",
+		"событие=%s" % String(ev["event"]))
 
 ## Полная партия: оба сиденья боты, крутим до конца матча. Проверяем, что игра
 ## доходит до исхода, счёт конечен и на каждом ходу сумма жетонов равна итогу.

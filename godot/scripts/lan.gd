@@ -22,6 +22,8 @@ signal hosts_found(list: Array)           ## найденные хосты: [{na
 signal match_started(mode: String, seed_value: int)   ## хост задал партию
 signal move_received(seat: String, hand_idx: int, cell_idx: int)
 signal next_round_received
+## Соперник вышел из партии в меню: ждать его хода или «Ещё раз» больше нечего.
+signal match_left
 ## Действие Дуракуба: attack/defend по индексу куба в руке, bito/take без индекса.
 signal durak_action_received(seat: String, act: String, hand_idx: int)
 ## Соперник представился: имя его устройства. Нужно, чтобы вместо IP-адреса и
@@ -247,8 +249,12 @@ func _stop_discovery() -> void:
 	set_process(false)
 
 func _on_peer_disconnected(_id: int) -> void:
+	# после send_leave разрыв — запланированное завершение, а не потеря соперника:
+	# о нём не сигналим, иначе ушедший сам увидел бы «СВЯЗЬ ПОТЕРЯНА» поверх меню
+	var was := connected
 	connected = false
-	peer_lost.emit()
+	if was:
+		peer_lost.emit()
 
 func _on_connection_failed() -> void:
 	connected = false
@@ -272,6 +278,19 @@ func send_next_round() -> void:
 	if not connected:
 		return
 	_remote_next_round.rpc()
+
+## Выходим из партии в меню: сопернику уходит «вышел», а соединение закрывается
+## вежливо — peer_disconnect_later сперва довозит очередь пакетов (само
+## сообщение) и только потом рвёт связь. Жёсткий stop() сразу после отправки
+## терял пакет прямо в очереди — сообщение не доходило, это проверено тестом.
+func send_leave() -> void:
+	if not connected:
+		return
+	_remote_leave.rpc()
+	if _peer != null and _peer.host != null:
+		for p in _peer.host.get_peers():
+			p.peer_disconnect_later(0)
+	connected = false
 
 ## Дуракуб ходит теми же данными: что сделали и каким кубом руки. Раздача у обоих
 ## одна (сид), поэтому индекса достаточно — состояние сходится само.
@@ -308,6 +327,10 @@ func _remote_move(seat: String, hand_idx: int, cell_idx: int) -> void:
 @rpc("any_peer", "call_remote", "reliable")
 func _remote_next_round() -> void:
 	next_round_received.emit()
+
+@rpc("any_peer", "call_remote", "reliable")
+func _remote_leave() -> void:
+	match_left.emit()
 
 @rpc("any_peer", "call_remote", "reliable")
 func _remote_durak(seat: String, act: String, hand_idx: int) -> void:

@@ -111,6 +111,63 @@ func run() -> void:
 	client.close()
 	server.close()
 
+	await leave_case()
+
+## Выход из партии: сообщение обязано дойти до соперника раньше, чем закроется
+## соединение, — иначе тот вечно ждёт хода или «Ещё раз» на экране исхода.
+## Тут два настоящих Lan-узла: у каждого свой MultiplayerAPI со своим корнем,
+## пути узлов «Lan» совпадают относительно корней — как на двух устройствах.
+## В script-режиме SceneTree кастомные API сам не опрашивает — опрашиваем руками.
+func leave_case() -> void:
+	# дерево оживает только после первого кадра: до него root ещё не в дереве,
+	# add_child не даёт узлам ни пути, ни multiplayer — а весь тест до этого
+	# места может пройти синхронно, не уступив движку ни разу
+	await process_frame
+	var root_a := Node.new()
+	root_a.name = "A"
+	root.add_child(root_a)
+	var root_b := Node.new()
+	root_b.name = "B"
+	root.add_child(root_b)
+	set_multiplayer(MultiplayerAPI.create_default_interface(), root_a.get_path())
+	set_multiplayer(MultiplayerAPI.create_default_interface(), root_b.get_path())
+	var api_a := get_multiplayer(root_a.get_path())
+	var api_b := get_multiplayer(root_b.get_path())
+	var lan_a := Lan.new()
+	root_a.add_child(lan_a)
+	var lan_b := Lan.new()
+	root_b.add_child(lan_b)
+
+	var hosted := lan_a.start_host("Хост")
+	var joined := lan_b.join("127.0.0.1")
+	var linked := false
+	for i in 200:
+		api_a.poll()
+		api_b.poll()
+		if lan_a.connected and lan_b.connected:
+			linked = true
+			break
+		await create_timer(0.02)
+	check(hosted and joined and linked, "Lan-узлы соединились в одном процессе",
+		"хост=%s клиент=%s связь=%s" % [str(hosted), str(joined), str(linked)])
+
+	var got := {"left": false}
+	lan_b.match_left.connect(func(): got["left"] = true)
+	lan_a.send_leave()
+	for i in 200:
+		api_a.poll()
+		api_b.poll()
+		if got["left"]:
+			break
+		await create_timer(0.02)
+	check(got["left"] and not lan_a.connected,
+		"«вышел из партии» дошло, а связь у ушедшего закрылась",
+		"дошло=%s связь ушедшего=%s" % [str(got["left"]), str(lan_a.connected)])
+
+	lan_b.stop()
+	root_a.queue_free()
+	root_b.queue_free()
+
 ## Дуракуб по сети. Действий четыре, и каждое сериализуется тремя значениями:
 ## сиденье, что сделал, индекс куба в руке. Гоняем целый кон крест-накрест и
 ## сверяем руки, стол, колоду и отбой: разъедутся — игроки увидят разные столы.

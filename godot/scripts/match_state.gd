@@ -250,6 +250,10 @@ static func play(state: Dictionary, seat: String, hand_idx: int, cell_idx: int) 
 ## Пас не просит ширмы: выбора нет, и экран не должен переезжать к пасующему —
 ## иначе сидящий увидит его руку.
 static func advance(state: Dictionary) -> Dictionary:
+	# после конца матча ходов нет: устаревший таймер интерфейса не должен
+	# двигать счётчики поверх закрытого состояния
+	if bool(state["over"]):
+		return {"event": "over"}
 	if all_moves_spent(state):
 		return {"event": "round_end"}
 	var nxt := next_seat(state, String(state["turn"]))
@@ -297,6 +301,7 @@ static func close_round(state: Dictionary) -> Dictionary:
 		for seat in state["order"]:
 			state["players"][seat]["total"] = int(state["players"][seat]["total"]) + int(state["players"][seat]["score"])
 	out["match_over"] = is_match_over(state)
+	state["over"] = bool(out["match_over"])
 	return out
 
 static func is_match_over(state: Dictionary) -> bool:
