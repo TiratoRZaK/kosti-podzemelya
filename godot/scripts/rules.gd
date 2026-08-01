@@ -283,6 +283,10 @@ static func apply_move(state: Dictionary, seat: String, hand_idx: int, cell_idx:
 	var delta := gain - spikes_hit
 	player["score"] = int(player["score"]) + delta
 	player["moves"] = int(player["moves"]) + 1
+	# «Территория» считает не кубы в конце раунда, а сумму удержанных клеток после
+	# каждого хода: иначе раунд забирал тот, кто ходит последним, — второй игрок
+	# брал 60% раундов просто по очереди хода
+	player["held"] = int(player.get("held", 0)) + owner_count(board, seat)
 
 	return {
 		"seat": seat, "cell": cell_idx, "parts": parts, "pts": delta,

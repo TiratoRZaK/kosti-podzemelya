@@ -33,7 +33,7 @@ const MODES := {
 		"cols": 3, "cells": 6, "moves": 6, "kind": "race", "target": 500, "deck": "shared",
 	},
 	"territory": {
-		"title": "ТЕРРИТОРИЯ", "sub": "3 раунда · раунд берёт тот, чьих кубов на поле больше",
+		"title": "ТЕРРИТОРИЯ", "sub": "3 раунда · за каждый ход считаются удержанные клетки",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "bo3", "win_by": "count", "deck": "draft",
 	},
 }
@@ -142,7 +142,7 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 	for seat in order:
 		players[seat] = {
 			"hand": [], "deck": [], "score": 0, "total": 0,
-			"moves": 0, "lives": LIVES_MAX, "wins": 0,
+			"moves": 0, "lives": LIVES_MAX, "wins": 0, "held": 0,
 		}
 	var state := {
 		"mode": mode_key, "cfg": cfg, "seed": seed_value,
@@ -179,6 +179,7 @@ static func new_round(state: Dictionary) -> void:
 		state["board"].append(null)
 	for seat in state["order"]:
 		state["players"][seat]["moves"] = 0
+		state["players"][seat]["held"] = 0
 		if String(cfg["kind"]) != "race":
 			state["players"][seat]["score"] = 0
 	if String(cfg["deck"]) == "per_round":
@@ -198,7 +199,10 @@ static func new_round(state: Dictionary) -> void:
 		var pl: Dictionary = state["players"][seat]
 		while pl["hand"].size() < HAND_SIZE and not pl["deck"].is_empty():
 			pl["hand"].append(pl["deck"].pop_back())
-	# первый ход чередуется между раундами
+	# Первым ходит победитель прошлого раунда. Ходить первым невыгодно (правило
+	# съедения «не меньше» отдаёт преимущество отвечающему), а при простом
+	# чередовании в трёх раундах одно сиденье начинало дважды — и режимы «до трёх
+	# побед» ложились в сторону второго игрока.
 	state["turn"] = String(state["first_seat"])
 	state["first_seat"] = other_seat(state, String(state["first_seat"]))
 	state["shown_to"] = ""
@@ -275,10 +279,10 @@ static func round_outcome(state: Dictionary) -> Dictionary:
 	var a := String(state["order"][0])
 	var b := String(state["order"][1])
 	if String(cfg.get("win_by", "")) == "count":
-		var ca := Rules.owner_count(state["board"], a)
-		var cb := Rules.owner_count(state["board"], b)
+		var ca := int(state["players"][a].get("held", 0))
+		var cb := int(state["players"][b].get("held", 0))
 		var w := "" if ca == cb else (a if ca > cb else b)
-		return {"winner": w, "detail": "Кубов на поле %d : %d" % [ca, cb]}
+		return {"winner": w, "detail": "Удержано клеток %d : %d" % [ca, cb]}
 	var sa := int(state["players"][a]["score"])
 	var sb := int(state["players"][b]["score"])
 	var w2 := "" if sa == sb else (a if sa > sb else b)
@@ -300,6 +304,13 @@ static func close_round(state: Dictionary) -> Dictionary:
 			state["players"][w]["wins"] = int(state["players"][w]["wins"]) + 1
 		for seat in state["order"]:
 			state["players"][seat]["total"] = int(state["players"][seat]["total"]) + int(state["players"][seat]["score"])
+	# Следующий раунд начинает победитель этого. Ходить первым невыгодно: правило
+	# съедения «не меньше» отдаёт преимущество отвечающему, и раньше при простом
+	# чередовании в трёх раундах одно сиденье начинало дважды — режимы «до трёх
+	# побед» ложились в сторону второго игрока (драфт 43% против 57%). Заодно это
+	# работает как догоняющая механика. При ничьей порядок просто чередуется.
+	if String(out["winner"]) != "":
+		state["first_seat"] = String(out["winner"])
 	out["match_over"] = is_match_over(state)
 	state["over"] = bool(out["match_over"])
 	return out

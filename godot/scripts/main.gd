@@ -2098,8 +2098,12 @@ func _score_text(seat: String, kind: String, cfg: Dictionary) -> String:
 	if kind == "race":
 		return "%d/%d" % [sc, int(cfg["target"])]
 	if String(cfg.get("win_by", "")) == "count":
-		var n := Rules.owner_count(state["board"], seat)
-		return "%d %s · %d очк." % [n, _plural(n, "куб", "куба", "кубов"), sc]
+		# крупно — накопленное за раунд удержание, мелко — сколько держим сейчас:
+		# раунд решает первое, и игрок должен видеть именно ту цифру, по которой
+		# его судят
+		var held := int(state["players"][seat].get("held", 0))
+		var now := Rules.owner_count(state["board"], seat)
+		return "%d · сейчас %d" % [held, now]
 	return str(sc)
 
 func _rebuild_board(me: String) -> void:

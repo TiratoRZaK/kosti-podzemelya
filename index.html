@@ -455,7 +455,7 @@ var MODES={
   big:      {title:'БОЛЬШАЯ ДОСКА', sub:'3 жизни · поле 3×3 · 10 ходов в раунде', cols:3, cells:9, moves:10, kind:'lives', deck:'perRound', deckSize:14},
   draft:    {title:'СВОЯ КОЛОДА',   sub:'Собери 18 кубов из 30 · у врага та же колода · 3 раунда, побеждает счёт', cols:3, cells:6, moves:6, kind:'bo3', winBy:'score', deck:'draft'},
   race:     {title:'ГОНКА ДО 500',  sub:'Случайная общая колода · счёт копится между раундами · кто первым наберёт 500', cols:3, cells:6, moves:6, kind:'race', target:500, deck:'shared'},
-  territory:{title:'ТЕРРИТОРИЯ',    sub:'Собери колоду · 3 раунда · раунд берёт тот, чьих кубов на поле осталось больше', cols:3, cells:6, moves:6, kind:'bo3', winBy:'count', deck:'draft'},
+  territory:{title:'ТЕРРИТОРИЯ',    sub:'Собери колоду · 3 раунда · за каждый ход считаются удержанные клетки', cols:3, cells:6, moves:6, kind:'bo3', winBy:'count', deck:'draft'},
   durak:    {title:'ДУРАКУБ',       sub:'Подкидной дурак как в картах: 24 куба, 4 масти, козырь · остался с кубами — ты Дуракуб', kind:'durak'}
 };
 var MODE_ORDER=['classic','big','draft','race','territory','durak'];
@@ -654,7 +654,7 @@ function newRound(){
   S.round++;
   S.board=[];
   for(var bi=0;bi<S.cfg.cells;bi++)S.board.push(null);
-  S.order.forEach(function(o){pl(o).moves=0;});
+  S.order.forEach(function(o){pl(o).moves=0; pl(o).held=0;});
   if(S.cfg.kind!=='race')S.order.forEach(function(o){pl(o).score=0;});
   if(S.cfg.deck==='perRound'){
     S.pDeck=makeDeck(S.cfg.deckSize); S.eDeck=makeDeck(S.cfg.deckSize);
@@ -855,6 +855,10 @@ function applyMove(owner,handIdx,cellIdx){
   var delta=gain-spikesHit;
   if(owner==='p')S.pScore+=delta;
   else S.eScore+=delta;
+  // «Территория» считает не кубы в конце раунда, а сумму удержанных клеток после
+  // каждого хода: иначе раунд забирал тот, кто ходит последним — второй игрок брал
+  // 60% раундов просто по очереди хода, а матчи 30 на 66
+  pl(owner).held=(pl(owner).held||0)+ownerCount(S.board,owner);
 
   incMoves(owner);
   S.history.push({n:S.history.length+1, who:owner, pts:delta, parts:parts, mined:mined});
@@ -927,16 +931,20 @@ function endRound(){
     var w1=vb3?'РАУНД ТВОЙ!':(seatName('p').toUpperCase()+' БЕРЁТ РАУНД');
     var w2=vb3?'РАУНД ЗА ВРАГОМ':(seatName('e').toUpperCase()+' БЕРЁТ РАУНД');
     if(S.cfg.winBy==='count'){
-      var pc=ownerCount(S.board,'p'), ec=ownerCount(S.board,'e');
-      if(pc>ec){S.pWins++; msg=w1; sub='Кубов на поле '+pc+' : '+ec;}
-      else if(ec>pc){S.eWins++; msg=w2; sub='Кубов на поле '+pc+' : '+ec;}
-      else{msg='НИЧЬЯ В РАУНДЕ'; sub='Кубов поровну: '+pc+' : '+ec;}
+      var pc=pl('p').held||0, ec=pl('e').held||0;
+      if(pc>ec){S.pWins++; msg=w1; sub='Удержано клеток '+pc+' : '+ec;}
+      else if(ec>pc){S.eWins++; msg=w2; sub='Удержано клеток '+pc+' : '+ec;}
+      else{msg='НИЧЬЯ В РАУНДЕ'; sub='Удержано поровну: '+pc+' : '+ec;}
     }else{
       if(S.pScore>S.eScore){S.pWins++; msg=w1; sub='Счёт '+S.pScore+' : '+S.eScore;}
       else if(S.eScore>S.pScore){S.eWins++; msg=w2; sub='Счёт '+S.pScore+' : '+S.eScore;}
       else{msg='НИЧЬЯ В РАУНДЕ'; sub='Счёт '+S.pScore+' : '+S.eScore;}
     }
     S.pTotal+=S.pScore; S.eTotal+=S.eScore;
+    // следующий раунд начинает победитель этого: ходить первым невыгодно (правило
+    // съедения «не меньше» на стороне отвечающего), а при простом чередовании в
+    // трёх раундах одно сиденье начинало дважды
+    if(msg===w1)S.firstP=true; else if(msg===w2)S.firstP=false;
     sub+=' · победы '+S.pWins+' : '+S.eWins;
     render();
     if(S.pWins>=2||S.eWins>=2||S.round>=3){schedule(matchEnd,700);}
@@ -1550,9 +1558,10 @@ function render(){
   if(S.cfg.winBy==='count'){
     // раунд берёт тот, чьих кубов на поле больше — крупно кубы, очки мелким
     // (они решают только при равных раундах)
+    var ph=pl(me).held||0, eh=pl(foe).held||0;
     var pc=ownerCount(S.board,me), ec=ownerCount(S.board,foe);
-    $('pScore').innerHTML=pc+'<small'+(myScore<0?' class="neg"':'')+'>'+plural(pc,'куб','куба','кубов')+' · '+myScore+' очк.</small>';
-    $('eScore').innerHTML=ec+'<small'+(foeScore<0?' class="neg"':'')+'>'+plural(ec,'куб','куба','кубов')+' · '+foeScore+' очк.</small>';
+    $('pScore').innerHTML=ph+'<small'+(myScore<0?' class="neg"':'')+'>сейчас '+pc+' · '+myScore+' очк.</small>';
+    $('eScore').innerHTML=eh+'<small'+(foeScore<0?' class="neg"':'')+'>сейчас '+ec+' · '+foeScore+' очк.</small>';
   }else{
     $('pScore').textContent=k==='race'?myScore+'/'+S.cfg.target:myScore;
     $('eScore').textContent=k==='race'?foeScore+'/'+S.cfg.target:foeScore;
