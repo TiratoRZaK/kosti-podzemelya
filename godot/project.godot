@@ -33,6 +33,6 @@ window/energy_saving/keep_screen_on=true
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
-renderer/rendering_method.mobile="gl_compatibility"
+renderer/rendering_method.mobile="mobile"
 ; без ETC2/ASTC Android-экспорт отказывается собираться
 textures/vram_compression/import_etc2_astc=true
