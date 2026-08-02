@@ -1538,11 +1538,19 @@ func _build_draft() -> Control:
 	var t := _label("СВОЯ КОЛОДА", 20, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(t)
+	var about := _label("Собери 18 кубов из 30. У соперника будет ТА ЖЕ колода — состязание в том, как ты ей сыграешь.", 11, Palette.MUTED)
+	about.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	about.custom_minimum_size.x = 320
+	about.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(about)
 	draft_note = _label("", 12, Palette.MUTED)
 	draft_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(draft_note)
+	var rules_btn := _button("Что умеют кубы", true)
+	rules_btn.pressed.connect(_show_rules)
+	v.add_child(rules_btn)
 	draft_grid = GridContainer.new()
-	draft_grid.columns = 6
+	draft_grid.columns = 5
 	draft_grid.add_theme_constant_override("h_separation", 5)
 	draft_grid.add_theme_constant_override("v_separation", 5)
 	var scroll := ScrollContainer.new()
@@ -1593,7 +1601,7 @@ func _draft_refresh() -> void:
 		var die: Dictionary = draft_offer[i]
 		var chosen: bool = draft_picked.has(i)
 		var slot := Panel.new()
-		slot.custom_minimum_size = Vector2(48, 48)
+		slot.custom_minimum_size = Vector2(60, 60)
 		var sb := StyleBoxFlat.new()
 		sb.bg_color = Palette.CELL
 		sb.set_corner_radius_all(10)
@@ -1772,11 +1780,11 @@ const ABILITY_ICONS := {
 	"warlock": "res://assets/icons/icon_orb.png",
 }
 const ABILITY_TEXT := {
-	"shield": "Два хода соперника его нельзя съесть — даже колдуном.",
-	"spikes": "Скрыт от соперника. Съевший теряет 10 очков.",
-	"mine": "Скрыта. Уничтожает себя и атакующего, ход сгорает.",
-	"jaw": "При выставлении съедает вражеский куб справа.",
-	"friendly": "Прибавляет к себе сумму значений соседей, максимум 12.",
+	"shield": "Два хода соперника его нельзя съесть — даже колдуном и челюстью.",
+	"spikes": "Скрыт от соперника. Съевший теряет 10 очков, но куб всё равно съеден.",
+	"mine": "Скрыта. Уничтожает себя и атакующего, а ход сгорает целиком: ни ренты, ни комбо за него не начислят.",
+	"jaw": "При выставлении съедает вражеский куб справа — любого значения, хоть шестёрку. В правом столбце бессильна.",
+	"friendly": "Прибавляет к себе сумму значений соседей, и своих и чужих, максимум 12. Дороже шести его уже не съесть обычным кубом.",
 	"warlock": "Ест куб любого значения и копирует его. Щит не пробивает.",
 }
 
@@ -2287,10 +2295,11 @@ func _build_rules() -> Control:
 	rb.add_child(_rules_line("Базовый куб ест куб со значением не больше своего: шестёрка ест всех, единица — только единицу."))
 	rb.add_child(_rules_head("Очки за ход"))
 	rb.add_child(_rules_line("Съел — значение съеденного куба."))
-	rb.add_child(_rules_line("Кубы на поле — сумма значений всех твоих кубов, начисляется каждый ход."))
+	rb.add_child(_rules_line("Кубы на поле — сумма значений всех твоих кубов, начисляется каждый ход. Это главный источник очков: из него приходит около трёх четвертей дохода."))
 	rb.add_child(_rules_line("Комбо из твоих кубов: пара +5, две пары +10, сет +15, фулл-хаус +25, каре +40, пятёрка +60, шестёрка +100."))
-	rb.add_child(_rules_line("Лесенка — подряд идущие значения: три +10, четыре +20, пять +35. Считается, когда одинаковых кубов нет."))
-	rb.add_child(_rules_line("Комбо начисляется каждый ход, пока кубы стоят на поле."))
+	rb.add_child(_rules_line("Лесенка — подряд идущие значения: три +10, четыре +20, пять +35. Годятся и кубы из пары: 3, 3, 4, 5 — это лесенка."))
+	rb.add_child(_rules_line("Считается только ЛУЧШАЯ комбинация, а не все сразу: 4, 4, 4, 5, 6 дают сет +15, а не сет с лесенкой."))
+	rb.add_child(_rules_line("Комбо начисляется каждый ход, пока кубы стоят на поле. Поэтому ранний ход стоит дороже позднего: он успеет принести доход много раз."))
 	rb.add_child(_rules_line("Тот, кто ходит в раунде первым, получает +8 очков: отвечать выгоднее, чем начинать."))
 	rb.add_child(_rules_head("Режимы"))
 	rb.add_child(_rules_line("Классика и Большая доска — три жизни, жизнь теряет проигравший раунд."))
@@ -2337,17 +2346,19 @@ func _rules_line(text: String) -> Control:
 	l.custom_minimum_size.x = 300
 	return l
 
+## Значок в правилах обязан совпадать со значком на кубе. Раньше в правилах была
+## нарисованная картинка, а на грани — эмодзи: игрок видел в правилах шипастый
+## шар, а на кубе ежа, и не связывал одно с другим.
 func _ability_row(key: String) -> Control:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
-	var path := String(ABILITY_ICONS[key])
-	if ResourceLoader.exists(path):
-		var ic := TextureRect.new()
-		ic.texture = load(path)
-		ic.custom_minimum_size = Vector2(44, 44)
-		ic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		ic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		row.add_child(ic)
+	var mark := _label(String(Rules.TYPES[key]["icon"]), 30, Palette.TEXT)
+	mark.custom_minimum_size = Vector2(44, 44)
+	mark.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mark.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(mark)
+	if false:
+		pass
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 1)
 	row.add_child(col)

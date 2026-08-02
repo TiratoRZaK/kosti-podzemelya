@@ -276,7 +276,16 @@ static func new_round(state: Dictionary) -> void:
 		for k in n:
 			var seat := String(order[(start + k) % n])
 			var komi := int(round(float(Rules.FIRST_MOVE_KOMI) * float(n - 1 - k) / float(n - 1)))
+			if komi == 0:
+				continue
 			state["players"][seat]["score"] = int(state["players"][seat]["score"]) + komi
+			# Компенсация попадает в ленту отдельной записью. Без неё счёт молча
+			# расходился с карточкой: игрок видел «ход 29», а счётчик показывал 37,
+			# и первое, что он складывал, не сходилось.
+			state["history"].append({
+				"n": state["history"].size() + 1, "who": seat, "pts": komi,
+				"parts": [{"t": "Ходишь раньше", "v": komi, "icon": "⏱"}], "mined": false,
+			})
 	state["first_seat"] = other_seat(state, String(state["first_seat"]))
 	state["shown_to"] = ""
 	state["history"] = []
