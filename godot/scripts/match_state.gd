@@ -21,29 +21,37 @@ const MODES := {
 	"classic": {
 		"title": "КЛАССИКА", "sub": "3 жизни · поле 3×2 · 6 ходов в раунде",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "lives", "deck": "per_round", "deck_size": 10,
-		"komi": Rules.FIRST_MOVE_KOMI,
+		"komi": Rules.FIRST_MOVE_KOMI, "komi3": 12, "komi4": 8,
 	},
 	"big": {
 		"title": "БОЛЬШАЯ ДОСКА", "sub": "3 жизни · поле 3×3 · 10 ходов в раунде",
 		"cols": 3, "cells": 9, "moves": 10, "kind": "lives", "deck": "per_round", "deck_size": 14,
-		# 3×3 и десять ходов: сырой перекос по счёту 15 очков против 7 в классике,
-		# шестёрки классики тут заведомо мало
-		"komi": 16,
+		# 3×3 и десять ходов: сырой перекос больше, чем в классике, но шестнадцать
+		# оказалось перебором — первый ходящий брал 38% раундов против 25% у
+		# последнего. Замеренные значения: 10 вдвоём, 8 втроём, 9 вчетвером.
+		"komi": 10, "komi3": 8, "komi4": 9,
 	},
 	"draft": {
 		"title": "СВОЯ КОЛОДА", "sub": "18 кубов из 30 · у соперника та же колода · 3 раунда",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "bo3", "win_by": "score", "deck": "draft",
-		"komi": Rules.FIRST_MOVE_KOMI,
+		"komi": 9, "komi3": 8, "komi4": 8,
 	},
 	"race": {
 		"title": "ГОНКА ДО 500", "sub": "общая колода · счёт копится · кто первым наберёт 500",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "race", "target": 500, "deck": "shared",
-		"komi": Rules.FIRST_MOVE_KOMI,
+		# Половины хватает: вторая половина шла не в справедливость, а в догонялку
+		# поверх правила «первым ходит отстающий» — 47 очков из 500 за партию.
+		"komi": 3, "komi3": 3, "komi4": 3,
 	},
 	"territory": {
 		"title": "ТЕРРИТОРИЯ", "sub": "3 раунда · за каждый ход считаются удержанные клетки",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "bo3", "win_by": "count", "deck": "draft",
-		"komi": Rules.FIRST_MOVE_KOMI,
+		# Здесь компенсация доходит до раунда только через ничью по клеткам (каждый
+		# пятый раунд), поэтому шести очков не хватало: перекос против первого
+		# держался на −4…−7 п.п.
+		# 18 — середина между «не доходит до раунда» (6 давало −5 п.п. первому) и
+		# «снежный ком» (24 давало +3 и тянуло весь матч через тай-брейк)
+		"komi": 18, "komi3": 14, "komi4": 14,
 	},
 }
 const MODE_ORDER := ["classic", "big", "draft", "race", "territory"]
@@ -75,11 +83,16 @@ const SEAT_NAMES := ["Игрок 1", "Игрок 2", "Игрок 3", "Игрок
 const BOT_NAMES := ["Костолом", "Могильщик", "Скелетина", "Точильщик"]
 
 ## Цена первого хода для режима и числа игроков.
+##
+## Общего множителя нет: сырой перекос на позицию втроём вдвое больше, чем
+## вчетвером, а на большой доске он вообще не такой, как в классике. Значения
+## подобраны прогонами по позициям отдельно для каждого состава.
 static func _komi_for(cfg: Dictionary, players: int) -> int:
-	var base := int(cfg.get("komi", Rules.FIRST_MOVE_KOMI))
-	if players >= 3:
-		return int(round(float(base) * 4.0 / 3.0))
-	return base
+	if players >= 4:
+		return int(cfg.get("komi4", cfg.get("komi", Rules.FIRST_MOVE_KOMI)))
+	if players == 3:
+		return int(cfg.get("komi3", cfg.get("komi", Rules.FIRST_MOVE_KOMI)))
+	return int(cfg.get("komi", Rules.FIRST_MOVE_KOMI))
 
 static func seat_ids(count: int) -> Array:
 	return SEAT_IDS.slice(0, clampi(count, 2, SEAT_IDS.size()))
@@ -189,24 +202,45 @@ static func replay(mode_key: String, seed_value: int, opponent: String, my_seat:
 	apply_duel(st, String(roll_duel(st)["winner"]))
 	for entry in log:
 		var seat := String(entry[0])
-		# ход мог прийти в конце раунда: доигрываем поток так же, как в живой игре
+		# Ход мог прийти в конце раунда: доигрываем поток так же, как в живой игре.
+		# Круг вчетвером — до 24 ходов, поэтому запас больше прежних шестнадцати.
 		var guard := 0
-		while String(st["turn"]) != seat and guard < 16:
+		while String(st["turn"]) != seat and guard < 64:
 			guard += 1
-			var ev := advance(st)
-			if String(ev["event"]) == "round_end":
-				var out := close_round(st)
-				if bool(out["match_over"]):
-					return st
-				new_round(st)
-		play(st, seat, int(entry[1]), int(entry[2]))
-		var ev2 := advance(st)
-		if String(ev2["event"]) == "round_end":
-			var out2 := close_round(st)
-			if bool(out2["match_over"]):
+			if not _replay_step(st):
 				return st
-			new_round(st)
+		play(st, seat, int(entry[1]), int(entry[2]))
+		if not _replay_step(st):
+			return st
 	return st
+
+## Один шаг потока после хода — дословно как в живой игре (`_after_move`).
+##
+## Ошибка была в том, что здесь делался РОВНО ОДИН `advance`, а живая игра на
+## событии «пас» продолжает крутить поток дальше. Когда раунд закрывался пасами и
+## пасовавший становился первым в новом раунде, догоняющий цикл сразу видел
+## «очередь уже его» и не докручивал — ход нового раунда ложился на доску
+## старого. Дальше расходилось всё: до 12% точек обрыва, а вчетвером журнал
+## приводил к обращению за пределы руки.
+##
+## Возвращает false, если матч кончился и продолжать нечего.
+static func _replay_step(state: Dictionary) -> bool:
+	var guard := 0
+	while guard < 64:
+		guard += 1
+		var ev := advance(state)
+		match String(ev["event"]):
+			"round_end":
+				var out := close_round(state)
+				if bool(out["match_over"]):
+					return false
+				new_round(state)
+				return true
+			"pass":
+				continue      # пас — поток идёт дальше, как в живой игре
+			_:
+				return true
+	return true
 
 ## picked — колода, набранная игроком на экране драфта. Пустая означает «набрать
 ## случайно»: так партию собирает клиент по сети и кнопка «Добрать случайно».
@@ -309,15 +343,19 @@ static func new_round(state: Dictionary) -> void:
 	# ленте — ровно то молчаливое начисление, которое запрещено правилом карточки.
 	state["shown_to"] = ""
 	state["history"] = []
-	var komi_now := int(state.get("komi", Rules.FIRST_MOVE_KOMI))
-	if komi_now != 0:
-		var order: Array = state["order"]
-		var n := order.size()
-		var start := order.find(String(state["turn"]))
+	# Считаем по живым, а не по стартовому составу. Иначе после выбывания за
+	# столом сидят двое, а надбавка берётся по кругу из четверых: на экране одна и
+	# та же картина, а «Ходишь раньше» показывает то +7, то +21 — в зависимости от
+	# того, какое сиденье умерло. Игроку это ниоткуда не видно.
+	var alive: Array = alive_seats(state)
+	var komi_now := _komi_for(cfg, alive.size())
+	if komi_now != 0 and alive.size() > 1:
+		var n := alive.size()
+		var start := alive.find(String(state["turn"]))
+		if start < 0:
+			start = 0
 		for k in n:
-			var seat := String(order[(start + k) % n])
-			if is_out(state, seat):
-				continue     # мёртвый не ходит, значит и компенсировать нечего
+			var seat := String(alive[(start + k) % n])
 			var komi := int(round(float(komi_now) * float(n - 1 - k) / float(n - 1)))
 			if komi == 0:
 				continue
@@ -379,6 +417,16 @@ static func has_legal(state: Dictionary, seat: String) -> bool:
 
 ## Сделать ход и записать его в историю.
 static func play(state: Dictionary, seat: String, hand_idx: int, cell_idx: int) -> Dictionary:
+	# Ход проверяется здесь, а не только в интерфейсе: сюда приходят и пакеты по
+	# сети, и записи журнала при восстановлении партии. Без проверки разбор чужого
+	# журнала клал кубы на собственные клетки — движок молча их «съедал».
+	if String(state["turn"]) != seat or bool(state.get("over", false)):
+		return {}
+	var hand: Array = state["players"][seat]["hand"]
+	if hand_idx < 0 or hand_idx >= hand.size():
+		return {}
+	if not Rules.legal_targets(state["board"], hand[hand_idx], seat).has(cell_idx):
+		return {}
 	var res := Rules.apply_move(state, seat, hand_idx, cell_idx)
 	# Журнал ходов: сид плюс эта последовательность полностью восстанавливают
 	# партию. Нужен для переподключения по Wi-Fi — иначе после обрыва связи
@@ -482,9 +530,13 @@ static func round_outcome(state: Dictionary) -> Dictionary:
 		elif v == best:
 			winners.append(seat)
 	# Ничья по удержанию — не редкость: клеток шесть, а игроков двое или четверо,
-	# и раунд не доставался никому в 12% случаев вдвоём и в 20% вчетвером. Заодно
-	# это делало бесполезной компенсацию за первый ход: она идёт в очки, а раунд
-	# «Территории» их не смотрел вовсе. Ничью решают очки.
+	# и раунд не доставался никому в 10% случаев вдвоём и в 21% вчетвером.
+	#
+	# Решают очки — и через них же наконец работает компенсация за первый ход:
+	# раунд считает клетки, а компенсация платится очками, поэтому до раунда она
+	# доходила только здесь. Отдавать ничью «тому, кто ходил раньше» пробовали —
+	# перекос переворачивался в другую сторону (вдвоём 61% против 39%), потому что
+	# ничья случается в каждом пятом раунде и уходила целиком одному.
 	if by_count and winners.size() > 1:
 		var best_score := -(1 << 30)
 		var tie := []

@@ -170,6 +170,9 @@ func territory_case(n: int, games: int) -> void:
 		for i in n:
 			roster.append({"kind": "bot", "local": false, "name": "Бот %d" % (i + 1)})
 		var s := MatchState.new_match("territory", 700 + g, "roster", "p", "", "Ты", [], roster)
+		# как в живой игре: первый ход разыгрывается битвой, иначе сиденье p всегда
+		# начинает и замер по сиденьям показывает несуществующий перекос
+		MatchState.apply_duel(s, String(MatchState.roll_duel(s)["winner"]))
 		var rng := MatchState.make_rng(17 + g)
 		var guard := 0
 		while not bool(s.get("over", false)) and guard < 6000:

@@ -99,7 +99,9 @@ static func combo_bonus(vals: Array) -> Dictionary:
 static func longest_run(count: Dictionary) -> Array:
 	var best := []
 	var cur := []
-	for v in range(1, 7):
+	# до 12, а не до 6: дружелюбный куб раздувается соседями до двенадцати, и
+	# лесенка из таких значений просто не замечалась
+	for v in range(1, FRIENDLY_CAP + 1):
 		if count.has(v):
 			cur.append(v)
 			if cur.size() > best.size():

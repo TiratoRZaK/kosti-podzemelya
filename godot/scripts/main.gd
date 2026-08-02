@@ -2919,6 +2919,11 @@ func _next_round() -> void:
 	await _events_phase()
 	if state.is_empty():
 		return
+	# Отсчёт прироста за раунд берём ПОСЛЕ покупок: в «Гонке» платят прогрессом, и
+	# цена ивента попадала в прирост — победителем раунда объявляли не того, кто
+	# больше набрал, а того, кто меньше потратил (13% раундов).
+	for seat in state["order"]:
+		state["players"][seat]["round_from"] = int(state["players"][seat]["score"])
 	_begin_turn(String(state["turn"]))
 
 ## Фаза ивентов: раз в несколько раундов игрокам выпадают предложения купить

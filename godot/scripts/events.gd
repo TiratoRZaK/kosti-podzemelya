@@ -21,26 +21,32 @@ const KINDS := ["buy", "reroll", "spy", "swap"]
 
 const INFO := {
 	"buy": {
-		"title": "ТОРГОВЕЦ", "cost": 40,
+		"title": "ТОРГОВЕЦ", "cost": 16,
 		"text": "Выбери куб — он ляжет в твою руку прямо сейчас.",
 	},
 	"reroll": {
-		"title": "ТОЧИЛЬЩИК", "cost": 25,
+		"title": "ТОЧИЛЬЩИК", "cost": 10,
 		"text": "Сточим грани: у твоего куба будет то значение, какое скажешь.",
 	},
 	"spy": {
-		"title": "СОГЛЯДАТАЙ", "cost": 15,
+		"title": "СОГЛЯДАТАЙ", "cost": 6,
 		"text": "Покажу руку любого соперника. Смотри, пока раунд не начался.",
 	},
 	"swap": {
-		"title": "МЕНЯЛА", "cost": 45,
+		"title": "МЕНЯЛА", "cost": 18,
 		"text": "Покажу руку соперника и обменяю твой куб на любой из неё.",
 	},
 }
 
 ## Защита стоит дороже любого ивента: за неё платят, чтобы соперник не смог
 ## посмотреть руку и не смог обменяться. Держится до конца следующего ивента.
-const WARD_COST := 60
+## Цены считаны от среднего счёта за раунд (60–70 в классике): покупка стоит
+## четверть раунда. Прежние 40–60 брались из накопленной казны, которая в режимах
+## на жизни не решала ничего, — покупка выходила бесплатной. Когда цену перевели
+## на счёт раунда, те же числа стали запретительными: копить оказалось выгоднее,
+## чем покупать. Оберег дешевле остальных: он спасает от двух ивентов из четырёх
+## и только если соперник их вытянет.
+const WARD_COST := 14
 const WARD_TITLE := "ОБЕРЕГ"
 
 ## С какого раунда возможны ивенты и как часто выпадают.
@@ -93,11 +99,27 @@ static func funds(state: Dictionary, seat: String) -> int:
 static func can_afford(state: Dictionary, seat: String, cost: int) -> bool:
 	return funds(state, seat) >= cost
 
-static func pay(state: Dictionary, seat: String, cost: int) -> void:
-	if String(state["cfg"]["kind"]) == "race":
-		state["players"][seat]["score"] = int(state["players"][seat]["score"]) - cost
-	else:
-		state["players"][seat]["total"] = int(state["players"][seat]["total"]) - cost
+## Платят и казной, и очками текущего раунда.
+##
+## Одной казной платить нельзя: в режимах на жизни `total` не решает ничего —
+## живой всегда остаётся хотя бы один, и ветка «победил по очкам за матч» не
+## срабатывает вовсе. Покупка выходила бесплатной, и выбора «брать или нет» не
+## существовало. Списание из счёта раунда делает цену настоящей в любом режиме:
+## начинаешь раунд в минусе и этот раунд тяжелее взять. Счёт может уйти
+## отрицательным — это давно разрешённое правило игры.
+static func pay(state: Dictionary, seat: String, cost: int, title: String = "Покупка") -> void:
+	var pl: Dictionary = state["players"][seat]
+	pl["score"] = int(pl["score"]) - cost
+	if String(state["cfg"]["kind"]) != "race":
+		# в гонке счёт и казна — одно и то же, вычитать дважды нельзя
+		pl["total"] = int(pl["total"]) - cost
+	# Покупка видна в ленте ходов: счёт раунда после неё другой, а молчаливое
+	# изменение счёта в этой игре запрещено — на том же месте когда-то поймали
+	# компенсацию за первый ход.
+	state["history"].append({
+		"n": state["history"].size() + 1, "who": seat, "pts": -cost,
+		"parts": [{"t": title, "v": cost, "neg": true, "icon": "🪙"}], "mined": false,
+	})
 
 ## Оберег: спасает от чужого ивента и сгорает, сработав.
 static func warded(state: Dictionary, seat: String) -> bool:
@@ -110,9 +132,9 @@ static func set_ward(state: Dictionary, seat: String, on: bool) -> void:
 
 ## Купить куб из предложенных — он сразу в руке.
 static func apply_buy(state: Dictionary, seat: String, offer: Array, idx: int) -> Dictionary:
-	if idx < 0 or idx >= offer.size():
+	if idx < 0 or idx >= offer.size() or not can_afford(state, seat, cost_of("buy")):
 		return {"ok": false}
-	pay(state, seat, cost_of("buy"))
+	pay(state, seat, cost_of("buy"), "Куплен куб")
 	var die: Dictionary = (offer[idx] as Dictionary).duplicate()
 	state["players"][seat]["hand"].append(die)
 	return {"ok": true, "die": die}
@@ -120,9 +142,9 @@ static func apply_buy(state: Dictionary, seat: String, offer: Array, idx: int) -
 ## Заменить значение своего куба.
 static func apply_reroll(state: Dictionary, seat: String, hand_idx: int, value: int) -> Dictionary:
 	var hand: Array = state["players"][seat]["hand"]
-	if hand_idx < 0 or hand_idx >= hand.size():
+	if hand_idx < 0 or hand_idx >= hand.size() or not can_afford(state, seat, cost_of("reroll")):
 		return {"ok": false}
-	pay(state, seat, cost_of("reroll"))
+	pay(state, seat, cost_of("reroll"), "Сточен куб")
 	var was := int(hand[hand_idx]["value"])
 	hand[hand_idx]["value"] = clampi(value, 1, 6)
 	return {"ok": true, "was": was, "now": int(hand[hand_idx]["value"])}
@@ -130,7 +152,11 @@ static func apply_reroll(state: Dictionary, seat: String, hand_idx: int, value: 
 ## Посмотреть руку соперника. Оберег закрывает её, но деньги всё равно списаны:
 ## соглядатай сходил и вернулся ни с чем.
 static func apply_spy(state: Dictionary, seat: String, target: String) -> Dictionary:
-	pay(state, seat, cost_of("spy"))
+	# цель проверяем ДО оплаты: раньше неизвестное сиденье валило игру уже после
+	# списания
+	if not state["players"].has(target) or not can_afford(state, seat, cost_of("spy")):
+		return {"ok": false}
+	pay(state, seat, cost_of("spy"), "Подглядел")
 	if warded(state, target):
 		set_ward(state, target, false)
 		return {"ok": true, "blocked": true, "hand": []}
@@ -139,11 +165,13 @@ static func apply_spy(state: Dictionary, seat: String, target: String) -> Dictio
 ## Обменять свой куб на куб из руки соперника.
 static func apply_swap(state: Dictionary, seat: String, mine_idx: int,
 		target: String, their_idx: int) -> Dictionary:
+	if not state["players"].has(target) or not can_afford(state, seat, cost_of("swap")):
+		return {"ok": false}
 	var mine: Array = state["players"][seat]["hand"]
 	var theirs: Array = state["players"][target]["hand"]
 	if mine_idx < 0 or mine_idx >= mine.size() or their_idx < 0 or their_idx >= theirs.size():
 		return {"ok": false}
-	pay(state, seat, cost_of("swap"))
+	pay(state, seat, cost_of("swap"), "Обмен")
 	if warded(state, target):
 		set_ward(state, target, false)
 		return {"ok": true, "blocked": true}
@@ -154,9 +182,10 @@ static func apply_swap(state: Dictionary, seat: String, mine_idx: int,
 
 ## Купить оберег вместо предложенного ивента.
 static func apply_ward(state: Dictionary, seat: String) -> Dictionary:
-	if not can_afford(state, seat, WARD_COST):
+	# второй оберег поверх висящего — выброшенные очки, не даём его купить
+	if not can_afford(state, seat, WARD_COST) or warded(state, seat):
 		return {"ok": false}
-	pay(state, seat, WARD_COST)
+	pay(state, seat, WARD_COST, "Оберег")
 	set_ward(state, seat, true)
 	return {"ok": true}
 

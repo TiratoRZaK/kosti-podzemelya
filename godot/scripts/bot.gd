@@ -41,10 +41,14 @@ static func eval_move(state: Dictionary, die: Dictionary, cell_idx: int, seat: S
 	# щит нельзя съесть два хода — эта рента доживёт до следующего хода
 	if die["type"] == "shield":
 		gain += int(piece["v"])
-	# сколько комбо отняли у соперника: без этого бот не мешал собирать пары
-	var opp := MatchState.other_seat(state, seat)
-	gain += int(Rules.combo_bonus(Rules.owner_vals(board, opp))["bonus"])
-	gain -= int(Rules.combo_bonus(Rules.owner_vals(b, opp))["bonus"])
+	# Сколько комбо отняли у соперников: без этого бот не мешал собирать пары.
+	# Считаем по всем, а не по одному — `other_seat` брал соседа по кругу, и за
+	# столом на четверых бот не видел двоих из трёх.
+	for opp in state["order"]:
+		if String(opp) == seat:
+			continue
+		gain += int(Rules.combo_bonus(Rules.owner_vals(board, String(opp)))["bonus"])
+		gain -= int(Rules.combo_bonus(Rules.owner_vals(b, String(opp)))["bonus"])
 	if String(state["cfg"].get("win_by", "")) == "count":
 		gain += Rules.owner_count(b, seat) * 10
 		if target != null:
