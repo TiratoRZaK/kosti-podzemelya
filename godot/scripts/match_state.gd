@@ -209,6 +209,10 @@ static func new_round(state: Dictionary) -> void:
 	# чередовании в трёх раундах одно сиденье начинало дважды — и режимы «до трёх
 	# побед» ложились в сторону второго игрока.
 	state["turn"] = String(state["first_seat"])
+	# компенсация за невыгодный первый ход начисляется сразу — она видна в счёте
+	if Rules.FIRST_MOVE_KOMI != 0:
+		var starter: String = String(state["turn"])
+		state["players"][starter]["score"] = int(state["players"][starter]["score"]) + Rules.FIRST_MOVE_KOMI
 	state["first_seat"] = other_seat(state, String(state["first_seat"]))
 	state["shown_to"] = ""
 	state["history"] = []

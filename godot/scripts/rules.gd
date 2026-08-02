@@ -17,6 +17,11 @@ const LIVES_MAX := 3
 const HAND_SIZE := 3
 const FRIENDLY_CAP := 12
 const SPIKES_PENALTY := 10
+## Компенсация тому, кто ходит в раунде первым. Правило съедения «не меньше»
+## отдаёт преимущество отвечающему: у второго счёт за раунд выше на 6%, и в
+## режимах до трёх побед это копилось в перекос 44 на 55. Размер подобран
+## прогонами — см. историю правок.
+const FIRST_MOVE_KOMI := 8
 const SHIELD_CHARGES := 2
 
 ## Типы кубов. hidden — противник не видит значок, пока куб не сработает.
@@ -32,8 +37,8 @@ const TYPES := {
 
 ## Веса раздачи: сумма 100. Держать синхронно с WEIGHTS веб-версии.
 const WEIGHTS := [
-	["basic", 50], ["shield", 9], ["spikes", 9], ["mine", 7],
-	["jaw", 9], ["friendly", 8], ["warlock", 8],
+	["basic", 50], ["shield", 12], ["spikes", 11], ["mine", 5],
+	["jaw", 12], ["friendly", 5], ["warlock", 5],
 ]
 
 # ---------------------------------------------------------------- комбинации
@@ -73,9 +78,45 @@ static func combo_bonus(vals: Array) -> Dictionary:
 		return {"bonus": 15, "name": "СЕТ!", "vals": [e0["v"]]}
 	if int(e0["c"]) == 2 and second_pair:
 		return {"bonus": 10, "name": "ДВЕ ПАРЫ", "vals": [e0["v"], e1["v"]]}
+	# «Лесенка» — подряд идущие значения. Даёт вторую линию игры: собирать разные
+	# вместо одинаковых. Без неё верх таблицы мёртв: на поле 3×2 пятёрка и
+	# шестёрка недостижимы в принципе, и за 250 матчей не встретилось ни одной, а
+	# в 44% раундов игрок не собирал вообще ничего.
+	var run := longest_run(count)
+	var run_bonus := run_score(run.size())
+	# лесенка сравнивается с парами честно, по величине бонуса
+	if int(e0["c"]) == 2 and second_pair and run_bonus <= 10:
+		return {"bonus": 10, "name": "ДВЕ ПАРЫ", "vals": [e0["v"], e1["v"]]}
+	if run_bonus > 0 and (int(e0["c"]) < 2 or run_bonus > 5):
+		return {"bonus": run_bonus, "name": "ЛЕСЕНКА!" if run.size() >= 4 else "ЛЕСЕНКА", "vals": run}
+	if int(e0["c"]) == 2 and second_pair:
+		return {"bonus": 10, "name": "ДВЕ ПАРЫ", "vals": [e0["v"], e1["v"]]}
 	if int(e0["c"]) == 2:
 		return {"bonus": 5, "name": "ПАРА", "vals": [e0["v"]]}
 	return {"bonus": 0, "name": "", "vals": []}
+
+## Самая длинная цепочка подряд идущих значений среди своих кубов.
+static func longest_run(count: Dictionary) -> Array:
+	var best := []
+	var cur := []
+	for v in range(1, 7):
+		if count.has(v):
+			cur.append(v)
+			if cur.size() > best.size():
+				best = cur.duplicate()
+		else:
+			cur = []
+	return best
+
+## Цена лесенки: три подряд +10, четыре +20, пять и больше +35.
+static func run_score(n: int) -> int:
+	if n >= 5:
+		return 35
+	if n == 4:
+		return 20
+	if n == 3:
+		return 10
+	return 0
 
 # ------------------------------------------------------------------- доска
 

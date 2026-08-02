@@ -51,13 +51,19 @@ func _init() -> void:
 	combo_case([2, 2, 2, 2], 40, "КАРЕ!")
 	combo_case([3, 3, 3, 3, 3], 60, "ПЯТЁРКА!")
 	combo_case([6, 6, 6, 6, 6, 6], 100, "ШЕСТЁРКА!")
-	combo_case([1, 2, 3], 0, "")
+	combo_case([1, 2, 3], 10, "ЛЕСЕНКА")     # с появлением лесенки это уже комбинация
+	combo_case([1, 3, 5], 0, "")             # вразнобой — по-прежнему ничего
 
 	print("")
 	print("--- щит и легальность ---")
 	print("")
 	shield_case()
 	spikes_visible_case()
+
+	print("")
+	print("--- лесенка ---")
+	print("")
+	run_case()
 
 	print("")
 	if fails > 0:
@@ -135,3 +141,30 @@ func spikes_visible_case() -> void:
 	if not ok:
 		fails += 1
 	print("%sскрытыми помечены только шипы и мина" % ["  OK  " if ok else " FAIL "])
+
+## Лесенка не должна перебивать то, что дороже её, и обязана считаться там, где
+## одинаковых кубов нет вовсе.
+func run_case() -> void:
+	var cases := [
+		{"vals": [2, 3, 4], "bonus": 10, "name": "ЛЕСЕНКА"},
+		{"vals": [1, 2, 3, 4], "bonus": 20, "name": "ЛЕСЕНКА!"},
+		{"vals": [2, 3, 4, 5, 6], "bonus": 35, "name": "ЛЕСЕНКА!"},
+		{"vals": [1, 3, 5], "bonus": 0, "name": ""},                  # не подряд
+		{"vals": [4, 4, 5, 6], "bonus": 10, "name": "ЛЕСЕНКА"},       # лесенка дороже пары
+		{"vals": [5, 5, 4, 4], "bonus": 10, "name": "ДВЕ ПАРЫ"},      # две пары не хуже
+		{"vals": [5, 5, 5, 4, 4], "bonus": 25, "name": "ФУЛЛ-ХАУС!"}, # фулл-хаус сильнее
+		{"vals": [6, 6, 6, 6], "bonus": 40, "name": "КАРЕ!"},         # каре сильнее
+		{"vals": [3, 3], "bonus": 5, "name": "ПАРА"},                 # пара как была
+	]
+	var ok := true
+	var detail := ""
+	for c in cases:
+		var got := Rules.combo_bonus(c["vals"])
+		if int(got["bonus"]) != int(c["bonus"]) or String(got["name"]) != String(c["name"]):
+			ok = false
+			detail += "%s → %s %d (ждали %s %d); " % [str(c["vals"]), String(got["name"]),
+				int(got["bonus"]), String(c["name"]), int(c["bonus"])]
+	if not ok:
+		fails += 1
+	print("%sлесенка считается и не перебивает старшие комбинации" % ["  OK  " if ok else " FAIL "])
+	print("        %s" % (detail if detail != "" else "9 раскладов сошлись"))
