@@ -31,6 +31,11 @@ signal durak_action_received(seat: String, act: String, hand_idx: int)
 ## Соперник представился: имя его устройства. Нужно, чтобы вместо IP-адреса и
 ## безликого «Соперника» в игре стояло понятное имя.
 signal peer_named(name_of_peer: String)
+## Состав лобби изменился: [{id, name}] подключённых. Нужен хосту, чтобы показать,
+## кто уже за столом, и решить, когда начинать.
+signal lobby_changed(players: Array)
+## Партия на троих и больше: состав целиком и своё сиденье в нём.
+signal party_started(mode: String, seed_value: int, roster: Array, my_seat: String)
 
 const GAME_PORT := 8177
 const DISCOVERY_PORT := 8178
@@ -42,6 +47,8 @@ var is_host := false
 var connected := false
 var player_name := "Игрок"
 var discovery_ok := true           # удалось ли занять порт обнаружения
+var table_seats := 2               # мест за столом, включая хозяина игры
+var lobby: Array = []              # подключённые: [{id, name}]
 var _announce_wait := 0.0
 
 var _peer: ENetMultiplayerPeer
@@ -66,11 +73,13 @@ func _ready() -> void:
 
 # ------------------------------------------------------------------- хост
 
-func start_host(name_of_player: String) -> bool:
+## seats — сколько всего мест за столом, включая хозяина игры.
+func start_host(name_of_player: String, seats: int = 2) -> bool:
 	stop()
 	player_name = name_of_player
+	table_seats = clampi(seats, 2, 4)
 	_peer = ENetMultiplayerPeer.new()
-	var err := _peer.create_server(GAME_PORT, 1)   # соперник ровно один
+	var err := _peer.create_server(GAME_PORT, table_seats - 1)
 	if err != OK:
 		push_warning("Не удалось поднять хост: %s" % err)
 		return false
@@ -236,7 +245,14 @@ func _patient_timeout(id: int) -> void:
 func _on_peer_connected(id: int) -> void:
 	connected = true
 	_patient_timeout(id)
-	_stop_discovery()          # хост нашли, слушать широковещалку больше незачем
+	if is_host:
+		lobby.append({"id": id, "name": "Игрок"})
+		lobby_changed.emit(lobby.duplicate(true))
+		# место занято — закрываем приём, когда стол полон
+		if lobby.size() >= table_seats - 1:
+			_stop_discovery()
+	else:
+		_stop_discovery()      # хост нашли, слушать широковещалку больше незачем
 	peer_connected.emit()
 
 func _on_connected_to_server() -> void:
@@ -254,7 +270,15 @@ func _stop_discovery() -> void:
 	_discovering = false
 	set_process(false)
 
-func _on_peer_disconnected(_id: int) -> void:
+func _on_peer_disconnected(id: int) -> void:
+	if is_host:
+		for i in range(lobby.size() - 1, -1, -1):
+			if int(lobby[i]["id"]) == id:
+				lobby.remove_at(i)
+		lobby_changed.emit(lobby.duplicate(true))
+	_forget_peer(id)
+
+func _forget_peer(_id: int) -> void:
 	# после send_leave разрыв — запланированное завершение, а не потеря соперника:
 	# о нём не сигналим, иначе ушедший сам увидел бы «СВЯЗЬ ПОТЕРЯНА» поверх меню
 	var was := connected
@@ -356,4 +380,42 @@ func _remote_resync(mode: String, seed_value: int, log: Array) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _remote_hello(name_of_peer: String) -> void:
+	if is_host:
+		var from := multiplayer.get_remote_sender_id()
+		for p in lobby:
+			if int(p["id"]) == from:
+				p["name"] = name_of_peer
+		lobby_changed.emit(lobby.duplicate(true))
 	peer_named.emit(name_of_peer)
+
+## Хозяин игры объявляет партию каждому лично: состав общий, а сиденье своё.
+func send_party(mode: String, seed_value: int, roster: Array, seat_by_peer: Dictionary) -> void:
+	if not connected:
+		return
+	for pid in seat_by_peer:
+		_remote_party.rpc_id(int(pid), mode, seed_value, roster, String(seat_by_peer[pid]))
+
+@rpc("any_peer", "call_remote", "reliable")
+func _remote_party(mode: String, seed_value: int, roster: Array, my_seat: String) -> void:
+	party_started.emit(mode, seed_value, roster, my_seat)
+
+## Ход в партии на троих идёт через хозяина игры: клиент шлёт ему, тот применяет
+## у себя и раздаёт остальным. Напрямую между клиентами Godot пакеты не возит.
+func send_move_party(seat: String, hand_idx: int, cell_idx: int) -> void:
+	if not connected:
+		return
+	if is_host:
+		_remote_move.rpc(seat, hand_idx, cell_idx)
+	else:
+		_relay_move.rpc_id(1, seat, hand_idx, cell_idx)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _relay_move(seat: String, hand_idx: int, cell_idx: int) -> void:
+	if not is_host:
+		return
+	var from := multiplayer.get_remote_sender_id()
+	move_received.emit(seat, hand_idx, cell_idx)      # хозяин применяет у себя
+	for p in lobby:
+		var pid := int(p["id"])
+		if pid != from:
+			_remote_move.rpc_id(pid, seat, hand_idx, cell_idx)

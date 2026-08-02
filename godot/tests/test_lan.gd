@@ -107,6 +107,7 @@ func run() -> void:
 	probe.free()
 
 	resync_case()
+	party_case()
 
 	durak_case()
 
@@ -286,3 +287,62 @@ func resync_case() -> void:
 	check(same and played >= 6, "партия восстанавливается из сида и журнала ходов",
 		"ходов в журнале=%d | доска %s против %s | ход у %s против %s" % [host["log"].size(),
 			_board(host), _board(back), String(host["turn"]), String(back["turn"])])
+
+## Партия на троих по сети: у каждого свой взгляд на один и тот же стол. Ход
+## делает владелец сиденья, применяют все трое — состояния обязаны совпасть.
+func party_case() -> void:
+	var seed_value := 13579
+	var roster := [
+		{"kind": "human", "name": "Хозяин"},
+		{"kind": "human", "name": "Гость"},
+		{"kind": "bot", "name": "Костолом"},
+	]
+	var ids := MatchState.seat_ids(roster.size())
+	var views := {}
+	for i in ids.size():
+		var mine := []
+		for k in roster.size():
+			var d: Dictionary = roster[k]
+			var kind := String(d["kind"])
+			var is_me: bool = k == i
+			if kind == "human" and not is_me:
+				kind = "remote"
+			mine.append({"kind": kind, "local": is_me, "name": String(d["name"])})
+		views[String(ids[i])] = MatchState.new_match("classic", seed_value, "remote",
+			String(ids[i]), "Соперник", String(roster[i]["name"]), [], mine)
+
+	var lead: Dictionary = views[String(ids[0])]
+	var rng := MatchState.make_rng(4242)
+	var moves := 0
+	for step in 12:
+		var seat := String(lead["turn"])
+		if MatchState.moves_left(lead, seat) <= 0 or not MatchState.has_legal(lead, seat):
+			for v in views.values():
+				MatchState.advance(v)
+			continue
+		var mv := Bot.choose_move(lead, seat, rng)
+		if mv.is_empty():
+			break
+		# ход уходит всем и применяется каждым у себя
+		for v in views.values():
+			MatchState.play(v, seat, int(mv["hand"]), int(mv["cell"]))
+			MatchState.advance(v)
+		moves += 1
+
+	var same := true
+	var detail := ""
+	for id in ids:
+		var v: Dictionary = views[String(id)]
+		if _board(v) != _board(lead) or String(v["turn"]) != String(lead["turn"]):
+			same = false
+		detail += "%s:%s " % [String(id), _board(v)]
+	# сиденья зеркальны: у каждого местное только своё
+	var seats_ok := true
+	for i in ids.size():
+		var v: Dictionary = views[String(ids[i])]
+		for k in ids.size():
+			var should_be_local: bool = k == i
+			if MatchState.seat_local(v, String(ids[k])) != should_be_local and String(roster[k]["kind"]) == "human":
+				seats_ok = false
+	check(same and seats_ok and moves >= 8,
+		"партия на троих: три взгляда на один стол совпадают после %d ходов" % moves, detail)

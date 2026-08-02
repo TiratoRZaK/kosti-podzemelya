@@ -1767,9 +1767,10 @@ func _lobby_idle() -> void:
 	hint_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lobby_box.add_child(hint_l)
 
-	var host_btn := _button("Создать игру")
-	host_btn.pressed.connect(_lan_host)
-	lobby_box.add_child(host_btn)
+	for seats in [2, 3, 4]:
+		var b := _button("Создать игру на %d" % seats)
+		b.pressed.connect(_lan_host.bind(seats))
+		lobby_box.add_child(b)
 	var find_btn := _button("Найти игру")
 	find_btn.pressed.connect(_lan_find)
 	lobby_box.add_child(find_btn)
@@ -1802,10 +1803,10 @@ func _lobby_message(text: String, with_back: bool = true) -> void:
 		)
 		lobby_box.add_child(back)
 
-func _lan_host() -> void:
+func _lan_host(seats: int = 2) -> void:
 	_ensure_lan()
 	# представляемся именем профиля: соперник увидит «Рустам», а не IP или модель
-	if not lan.start_host(Profile.display_name()):
+	if not lan.start_host(Profile.display_name(), seats):
 		_lobby_message("Не удалось открыть игру: порт занят. Закрой другую копию игры и попробуй снова.")
 		return
 	my_seat = "p"
@@ -1912,6 +1913,8 @@ func _ensure_lan() -> void:
 	lan.durak_action_received.connect(_on_lan_durak_action)
 	lan.peer_named.connect(_on_lan_peer_named)
 	lan.resync_received.connect(_on_lan_resync)
+	lan.lobby_changed.connect(_on_lan_lobby)
+	lan.party_started.connect(_on_lan_party)
 
 func _on_lan_hosts(list: Array) -> void:
 	if list.is_empty():
@@ -1985,6 +1988,56 @@ func _on_lan_peer_named(name_of_peer: String) -> void:
 				if String(st["seats"][seat]["kind"]) == "remote":
 					st["seats"][seat]["name"] = foe_player
 	_refresh_screen()
+
+## Список подключившихся у хозяина игры: он ждёт, пока стол наполнится, и решает,
+## добить ли свободные места ботами.
+func _on_lan_lobby(players: Array) -> void:
+	if lan == null or not lan.is_host or not state.is_empty():
+		return
+	for c in lobby_box.get_children():
+		c.queue_free()
+	var t := _label("СТОЛ НА %d" % lan.table_seats, 18, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lobby_box.add_child(t)
+	lobby_box.add_child(_label("1. %s — это ты" % Profile.display_name(), 12, Palette.TEXT))
+	for i in players.size():
+		lobby_box.add_child(_label("%d. %s" % [i + 2, String(players[i]["name"])], 12, Palette.TEXT))
+	var free_seats: int = lan.table_seats - 1 - players.size()
+	for i in free_seats:
+		lobby_box.add_child(_label("%d. свободно — займёт бот" % (players.size() + 2 + i), 12, Palette.MUTED))
+	var go := _button("Начать" if free_seats == 0 else "Начать, места добьём ботами")
+	go.pressed.connect(func():
+		lobby_layer.visible = false
+		menu_layer.visible = true
+		_show_modes()
+		menu_note.text = "Стол собран — выбери режим."
+	)
+	lobby_box.add_child(go)
+	var back := _button("Отмена", true)
+	back.pressed.connect(func():
+		if lan != null:
+			lan.stop()
+		_lobby_idle()
+	)
+	lobby_box.add_child(back)
+
+## Партия по сети на троих и больше: состав пришёл от хозяина, своё сиденье тоже.
+func _on_lan_party(mode: String, seed_value: int, roster: Array, seat_id: String) -> void:
+	_new_flow()
+	my_seat = seat_id
+	opponent = "remote"
+	var ids := MatchState.seat_ids(roster.size())
+	var local_roster := []
+	for i in roster.size():
+		var d: Dictionary = roster[i]
+		var kind := String(d.get("kind", "bot"))
+		# своё сиденье местное, чужие человеческие — удалённые
+		var mine: bool = String(ids[i]) == seat_id
+		if kind == "human" and not mine:
+			kind = "remote"
+		local_roster.append({"kind": kind, "local": mine, "name": String(d.get("name", "Игрок"))})
+	roster_for_run = local_roster
+	_launch_match(mode, seed_value, [], local_roster)
 
 func _on_lan_connected() -> void:
 	foe_left = false
@@ -2267,6 +2320,31 @@ func _start_mode(key: String, deck: Array = []) -> void:
 		return
 	var seed_value := draft_seed if not deck.is_empty() else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
 	roster_for_run = _roster_for_match() if opponent == "roster" else []
+	if opponent == "remote" and lan != null and lan.is_host and lan.table_seats > 2:
+		# Стол на троих и больше: хозяин раздаёт сиденья по порядку подключения,
+		# свободные места занимают боты, и каждому лично уходит его сиденье.
+		var roster := [{"kind": "human", "name": Profile.display_name()}]
+		var seat_by_peer := {}
+		var ids := MatchState.seat_ids(lan.table_seats)
+		var at := 1
+		for p in lan.lobby:
+			roster.append({"kind": "human", "name": String(p["name"])})
+			seat_by_peer[int(p["id"])] = String(ids[at])
+			at += 1
+		var bots := 0
+		while roster.size() < lan.table_seats:
+			roster.append({"kind": "bot", "name": MatchState.BOT_NAMES[mini(bots, 3)]})
+			bots += 1
+		my_seat = "p"
+		lan.send_party(key, seed_value, roster, seat_by_peer)
+		var mine := []
+		for i in roster.size():
+			var d: Dictionary = roster[i]
+			mine.append({"kind": String(d["kind"]),
+				"local": String(ids[i]) == my_seat, "name": String(d["name"])})
+		roster_for_run = mine
+		_launch_match(key, seed_value, deck, mine)
+		return
 	if opponent == "remote" and lan != null and lan.is_host:
 		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
 	_launch_match(key, seed_value, deck)
@@ -2275,7 +2353,7 @@ func _start_mode(key: String, deck: Array = []) -> void:
 ## клиента из _on_lan_match_started. Раньше клиент собирал партию своей копией
 ## этого кода, и в ней не гасился оверлей исхода: после «Ещё раз» у хоста клиент
 ## смотрел на «Ждём хоста…» поверх уже идущей новой партии.
-func _launch_match(key: String, seed_value: int, deck: Array = []) -> void:
+func _launch_match(key: String, seed_value: int, deck: Array = [], roster: Array = []) -> void:
 	_new_flow()
 	_reset_shift()
 	menu_layer.visible = false
@@ -2285,7 +2363,7 @@ func _launch_match(key: String, seed_value: int, deck: Array = []) -> void:
 	durak_layer.visible = false
 	battle_root.visible = true
 	selected = -1
-	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name(), deck, roster_for_run)
+	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name(), deck, roster if not roster.is_empty() else roster_for_run)
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -2310,6 +2388,12 @@ func _begin_turn(seat: String) -> void:
 		_try_net_move()
 		return
 	if MatchState.seat_kind(state, seat) == "bot":
+		# в сетевой партии бота ведёт только хозяин игры: иначе каждый сделает ход
+		# за него, и состояния разъедутся
+		if opponent == "remote" and lan != null and not lan.is_host:
+			busy = true
+			_refresh()
+			return
 		busy = true
 		_refresh()
 		await get_tree().create_timer(BOT_DELAY).timeout
@@ -2688,7 +2772,11 @@ func _do_move(seat: String, hand_idx: int, cell_idx: int, broadcast: bool = true
 	selected = -1
 	# по сети уходит сам ход, а не состояние: три числа вместо всей доски
 	if broadcast and opponent == "remote" and lan != null and lan.connected:
-		lan.send_move(seat, hand_idx, cell_idx)
+		# на троих ход идёт через хозяина игры: он применяет и раздаёт остальным
+		if lan.table_seats > 2 or not lan.is_host:
+			lan.send_move_party(seat, hand_idx, cell_idx)
+		else:
+			lan.send_move(seat, hand_idx, cell_idx)
 	var res := MatchState.play(state, seat, hand_idx, cell_idx)
 	_refresh()
 	_animate_place(int(res["placed"]))
