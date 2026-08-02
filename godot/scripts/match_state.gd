@@ -13,6 +13,8 @@ extends RefCounted
 ## слой интерфейса. Это то, ради чего в вебе разделяли applyMove/presentMove.
 
 const HAND_SIZE := Rules.HAND_SIZE
+const DRAFT_OFFER := 30     # сколько кубов показывают на выбор
+const DRAFT_PICK := 18      # сколько из них уходит в колоду
 const LIVES_MAX := Rules.LIVES_MAX
 
 const MODES := {
@@ -134,8 +136,11 @@ static func shuffled(rng: RandomNumberGenerator, arr: Array) -> Array:
 
 # --------------------------------------------------------------- создание
 
+## picked — колода, набранная игроком на экране драфта. Пустая означает «набрать
+## случайно»: так партию собирает клиент по сети и кнопка «Добрать случайно».
 static func new_match(mode_key: String, seed_value: int, opponent: String,
-		my_seat: String = "p", foe_name: String = "Соперник", my_name: String = "") -> Dictionary:
+		my_seat: String = "p", foe_name: String = "Соперник", my_name: String = "",
+		picked: Array = []) -> Dictionary:
 	var cfg: Dictionary = MODES[mode_key]
 	var order := ["p", "e"]
 	var players := {}
@@ -163,11 +168,12 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 	# ещё не перенесён, поэтому набор случайный — как кнопка «Случайно» в вебе.
 	# Предложенные 30 держим в состоянии: экран драфта потом возьмёт их отсюда.
 	if String(cfg["deck"]) == "draft":
-		var offer := make_deck(state["rng"], 30)
+		var offer := make_deck(state["rng"], DRAFT_OFFER)
 		state["draft_offer"] = offer
-		var picked := shuffled(state["rng"], offer).slice(0, 18)
-		players["p"]["deck"] = shuffled(state["rng"], picked)
-		players["e"]["deck"] = shuffled(state["rng"], picked)
+		# у соперника та же колода: состязание в игре, а не в раздаче
+		var chosen: Array = picked if not picked.is_empty() else shuffled(state["rng"], offer).slice(0, DRAFT_PICK)
+		players["p"]["deck"] = shuffled(state["rng"], chosen)
+		players["e"]["deck"] = shuffled(state["rng"], chosen)
 	new_round(state)
 	return state
 

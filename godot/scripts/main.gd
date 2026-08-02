@@ -108,6 +108,14 @@ var name_layer: Control
 var name_input: LineEdit
 var name_error: Label
 var name_cancel: Button
+var draft_layer: Control
+var draft_grid: GridContainer
+var draft_note: Label
+var draft_go: Button
+var draft_offer: Array = []
+var draft_picked: Array = []
+var draft_mode := "draft"
+var draft_seed := 0
 
 func _ready() -> void:
 	_parse_args()
@@ -260,6 +268,8 @@ func _parse_args() -> void:
 			_shot_mode = "shake"
 		elif a == "--shot-combo":
 			_shot_mode = "combo"
+		elif a == "--shot-draft":
+			_shot_mode = "draft"
 		elif a == "--shot-name":
 			_shot_mode = "name_ask"
 		elif a == "--shot-modes":
@@ -1278,6 +1288,134 @@ func _mode_button(key: String, cfg: Dictionary) -> Control:
 	inner.add_child(s)
 	return box
 
+## Экран драфта: из тридцати предложенных кубов игрок набирает восемнадцать.
+##
+## Без него режим «Своя колода» обманывал названием: колода набиралась случайно,
+## и два режима из пяти отличались от классики только условием победы. Соперник
+## получает ту же колоду — состязание в том, как ты ей играешь, а не в раздаче.
+func _build_draft() -> Control:
+	var layer := _full_dim(0.96)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := _panel(Palette.PANEL_2)
+	center.add_child(panel)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 8)
+	v.custom_minimum_size.x = 330
+	panel.add_child(v)
+	var t := _label("СВОЯ КОЛОДА", 20, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(t)
+	draft_note = _label("", 12, Palette.MUTED)
+	draft_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(draft_note)
+	draft_grid = GridContainer.new()
+	draft_grid.columns = 6
+	draft_grid.add_theme_constant_override("h_separation", 5)
+	draft_grid.add_theme_constant_override("v_separation", 5)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(330, 330)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.add_child(draft_grid)
+	v.add_child(scroll)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	v.add_child(row)
+	draft_go = _button("В бой")
+	draft_go.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	draft_go.pressed.connect(_draft_start)
+	row.add_child(draft_go)
+	var rnd := _button("Добрать случайно", true)
+	rnd.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	rnd.pressed.connect(_draft_fill_random)
+	row.add_child(rnd)
+	var back := _button("Назад", true)
+	back.pressed.connect(func():
+		draft_layer.visible = false
+		_show_menu()
+	)
+	v.add_child(back)
+	return layer
+
+func _show_draft(mode_key: String) -> void:
+	if draft_layer == null:
+		draft_layer = _build_draft()
+		add_child(draft_layer)
+	draft_mode = mode_key
+	draft_seed = int(Time.get_unix_time_from_system()) & 0x7fffffff
+	# предложенные кубы берём тем же путём, что и сама партия: сид один, значит у
+	# соперника по сети будет ровно тот же набор
+	draft_offer = MatchState.make_deck(MatchState.make_rng(draft_seed), 30)
+	draft_picked.clear()
+	menu_layer.visible = false
+	draft_layer.visible = true
+	_draft_refresh()
+
+func _draft_refresh() -> void:
+	draft_note.text = "Выбрано %d из %d" % [draft_picked.size(), MatchState.DRAFT_PICK]
+	draft_go.disabled = draft_picked.size() != MatchState.DRAFT_PICK
+	draft_go.modulate = Color(1, 1, 1, 1.0 if not draft_go.disabled else 0.5)
+	for c in draft_grid.get_children():
+		c.queue_free()
+	for i in draft_offer.size():
+		var die: Dictionary = draft_offer[i]
+		var chosen: bool = draft_picked.has(i)
+		var slot := Panel.new()
+		slot.custom_minimum_size = Vector2(48, 48)
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Palette.CELL
+		sb.set_corner_radius_all(10)
+		sb.set_border_width_all(3 if chosen else 2)
+		sb.border_color = Palette.GOLD if chosen else Palette.CELL_EDGE
+		slot.add_theme_stylebox_override("panel", sb)
+		slot.mouse_filter = Control.MOUSE_FILTER_STOP
+		slot.gui_input.connect(func(e: InputEvent):
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				_draft_toggle(i)
+		)
+		draft_grid.add_child(slot)
+		var d := DieView.new()
+		d.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		d.offset_left = 4
+		d.offset_top = 4
+		d.offset_right = -4
+		d.offset_bottom = -4
+		d.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.add_child(d)
+		d.setup(int(die["value"]), String(die["type"]), true, true)
+		if not chosen:
+			d.modulate = Color(1, 1, 1, 0.45)
+
+func _draft_toggle(idx: int) -> void:
+	if draft_picked.has(idx):
+		draft_picked.erase(idx)
+	elif draft_picked.size() < MatchState.DRAFT_PICK:
+		draft_picked.append(idx)
+	buzz(15)
+	_draft_refresh()
+
+## «Добрать случайно» — для тех, кто не хочет возиться: добивает выбор до
+## восемнадцати, оставляя уже отмеченное.
+func _draft_fill_random() -> void:
+	var rest := []
+	for i in draft_offer.size():
+		if not draft_picked.has(i):
+			rest.append(i)
+	rest.shuffle()
+	while draft_picked.size() < MatchState.DRAFT_PICK and not rest.is_empty():
+		draft_picked.append(rest.pop_back())
+	_draft_refresh()
+
+func _draft_start() -> void:
+	if draft_picked.size() != MatchState.DRAFT_PICK:
+		return
+	var deck := []
+	for i in draft_picked:
+		deck.append(draft_offer[int(i)])
+	draft_layer.visible = false
+	_start_mode(draft_mode, deck)
+
 ## Экран имени: спрашивается один раз при первом запуске, потом доступен из меню.
 ## Имя видят соперники по Wi-Fi, поэтому об этом честно предупреждаем.
 func _build_name_screen() -> Control:
@@ -1866,20 +2004,27 @@ func _new_flow() -> void:
 	waiting_remote = false
 	pending_next_round = false
 
-func _start_mode(key: String) -> void:
+## deck — колода, набранная на экране драфта. Пустая означает «раздать самим»:
+## так запускаются остальные режимы и клиент по сети.
+func _start_mode(key: String, deck: Array = []) -> void:
 	if key == "durak":
 		await _start_durak()
 		return
-	var seed_value := int(Time.get_unix_time_from_system()) & 0x7fffffff
+	# «Свою колоду» и «Территорию» игрок сперва набирает руками — иначе название
+	# режима обманывает, а от классики он отличается только условием победы
+	if deck.is_empty() and String(MatchState.MODES[key]["deck"]) == "draft" and opponent != "remote":
+		_show_draft(key)
+		return
+	var seed_value := draft_seed if not deck.is_empty() else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
 	if opponent == "remote" and lan != null and lan.is_host:
 		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
-	_launch_match(key, seed_value)
+	_launch_match(key, seed_value, deck)
 
 ## Общий хвост запуска боевой партии: у хоста и одиночки из _start_mode, у
 ## клиента из _on_lan_match_started. Раньше клиент собирал партию своей копией
 ## этого кода, и в ней не гасился оверлей исхода: после «Ещё раз» у хоста клиент
 ## смотрел на «Ждём хоста…» поверх уже идущей новой партии.
-func _launch_match(key: String, seed_value: int) -> void:
+func _launch_match(key: String, seed_value: int, deck: Array = []) -> void:
 	_new_flow()
 	_reset_shift()
 	menu_layer.visible = false
@@ -1889,7 +2034,7 @@ func _launch_match(key: String, seed_value: int) -> void:
 	durak_layer.visible = false
 	battle_root.visible = true
 	selected = -1
-	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name())
+	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name(), deck)
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -2993,6 +3138,12 @@ func _shot_scenario() -> void:
 		"modes":
 			# второй шаг меню: выбор режима после выбора вида игры
 			_show_modes()
+			await get_tree().process_frame
+		"draft":
+			opponent = "bot"
+			_show_draft("draft")
+			for i in [0, 3, 5, 8, 11, 14]:
+				_draft_toggle(i)
 			await get_tree().process_frame
 		"combo":
 			opponent = "bot"
