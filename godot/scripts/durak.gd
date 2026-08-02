@@ -32,7 +32,7 @@ static func hand_size(state: Dictionary) -> int:
 
 ## roster — состав на троих и четверых; пустой означает игру на двоих.
 static func new_game(seed_value: int, opponent: String, my_seat: String = "p",
-		foe_name: String = "Соперник", my_name: String = "", roster: Array = []) -> Dictionary:
+		foe_name: String = "Гость", my_name: String = "", roster: Array = []) -> Dictionary:
 	var order: Array = MatchState.seat_ids(roster.size()) if roster.size() >= 2 else ["p", "e"]
 	var players := {}
 	for seat in order:

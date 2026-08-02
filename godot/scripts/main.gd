@@ -19,11 +19,12 @@ var state: Dictionary
 var rng := RandomNumberGenerator.new()
 var opponent := "bot"            # bot | human (хотсит) | remote (по сети)
 var my_seat := "p"               # своё сиденье: у клиента по сети — второе
-var foe_player := "Соперник"     # имя соперника, приходит по сети при знакомстве
+var foe_player := "Гость"        # имя соперника, приходит по сети при знакомстве
 var lan: Lan
 var foe_left := false          # соперник вышел сам — гасит «СВЯЗЬ ПОТЕРЯНА» вдогонку
 var reconnecting := false      # идёт цикл возврата в партию
 var _announced_out := {}       # о ком уже объявили «выбывает»
+var pending_events := {}       # чьи предложения ещё не показаны в этом раунде
 var lobby_layer: Control
 var lobby_box: VBoxContainer
 var selected := -1
@@ -119,6 +120,9 @@ var roster_layer: Control
 var roster_box: VBoxContainer
 var roster_kinds: Array = []   # типы мест со второго: bot | human | off
 var roster_scope := "solo"     # solo (только боты) | local (люди рядом и боты)
+var roster_names: Array = []   # имена людей рядом по местам
+var _seat_name_slot := 0       # какому месту сейчас вписывают имя
+var _naming_seat := false
 var modes_from := "kinds"      # куда вернёт «Назад» с экрана режимов
 var roster_for_run: Array = [] # состав, с которым запущена текущая партия
 var duel_layer: Control
@@ -1184,7 +1188,7 @@ func _d_update_hint(me: String, valid: Array) -> void:
 		var acting := Durak.actor(d_state)
 		var k := MatchState.seat_kind(d_state, acting) if acting != "" else ""
 		if k == "bot":
-			d_hint.text = "Соперник думает…"
+			d_hint.text = "%s думает…" % MatchState.seat_name(d_state, Durak.actor(d_state))
 		elif k == "remote":
 			d_hint.text = "Ход соперника…"
 		else:
@@ -1469,7 +1473,7 @@ func _d_take(seat: String, broadcast: bool = true) -> void:
 	var mine := seat == _d_viewer()
 	var phrase := "+%d %s в руку" % [taken, _plural(taken, "куб", "куба", "кубов")]
 	d_notice = ("ЗАБИРАЕШЬ СТОЛ · %s" % phrase) if mine \
-		else ("СОПЕРНИК ЗАБИРАЕТ СТОЛ · %s" % phrase)
+		else ("%s ЗАБИРАЕТ СТОЛ · %s" % [MatchState.seat_name(d_state, seat).to_upper(), phrase])
 	d_toast("%s забирает стол" % MatchState.seat_name(d_state, seat), not mine)
 	_d_refresh()
 	await get_tree().create_timer(1.4).timeout
@@ -1501,7 +1505,7 @@ func _d_finish() -> void:
 			text = "Кубы остались у тебя. Позор на все подземелья."
 		elif _solo(d_state) and d_state["order"].size() == 2:
 			title = "ПОБЕДА!"
-			text = "Соперник остался с кубами — дуракуб он."
+			text = "%s остался с кубами — дуракуб он." % MatchState.seat_name(d_state, loser)
 		else:
 			title = MatchState.seat_name(d_state, loser).to_upper() + " — ДУРАКУБ!"
 			text = "%s вышел первым, кубы остались у игрока %s." % [
@@ -1721,9 +1725,18 @@ func _roster_refresh() -> void:
 	roster_box.add_child(hint)
 
 	roster_box.add_child(_roster_row(0, "%s — это ты" % Profile.display_name(), ""))
+	var bots_seen := 0
 	for i in roster_kinds.size():
 		var kind := String(roster_kinds[i])
-		roster_box.add_child(_roster_row(i + 1, "Место %d" % (i + 2), kind))
+		# в строке стоит имя, а не «Место 3»: у ботов прозвища, у людей рядом —
+		# то, что вписали. Безликих «Игрок 2» в игре больше нет
+		var title := "Свободно"
+		if kind == "bot":
+			title = String(MatchState.BOT_NAMES[mini(bots_seen, MatchState.BOT_NAMES.size() - 1)])
+			bots_seen += 1
+		elif kind == "human":
+			title = _roster_name(i)
+		roster_box.add_child(_roster_row(i + 1, title, kind))
 
 	var go := _button("Дальше")
 	go.disabled = count < 2
@@ -1755,6 +1768,12 @@ func _roster_row(idx: int, title: String, kind: String) -> Control:
 	row.add_child(_grow())
 	if idx > 0:
 		row.add_child(_label(String(SEAT_KIND_NAMES.get(kind, kind)), 12, Palette.TEXT))
+		if kind == "human":
+			# человеку рядом имя вписывают: без этого он оставался «Игроком 2»
+			var pen := _button("имя", true)
+			pen.custom_minimum_size = Vector2(_touch(56.0), _touch(34.0))
+			pen.pressed.connect(func(): _ask_seat_name(idx - 1))
+			row.add_child(pen)
 		box.mouse_filter = Control.MOUSE_FILTER_STOP
 		box.gui_input.connect(func(e: InputEvent):
 			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
@@ -1769,6 +1788,17 @@ func _roster_row(idx: int, title: String, kind: String) -> Control:
 	else:
 		row.add_child(_label("человек", 12, Palette.TEXT))
 	return box
+
+## Имя человека рядом: своё для каждого места, по умолчанию — «Гость N».
+func _roster_name(slot: int) -> String:
+	while roster_names.size() <= slot:
+		roster_names.append("")
+	var n := String(roster_names[slot])
+	return n if n != "" else "Гость %d" % (slot + 1)
+
+func _ask_seat_name(slot: int) -> void:
+	_seat_name_slot = slot
+	_show_name_screen(false, true)
 
 ## Занятые места идут подряд: «пусто» уезжает в конец, иначе состав получается с
 ## дырой и сиденья в партии перестают соответствовать строкам экрана.
@@ -2340,18 +2370,31 @@ func _build_name_screen() -> Control:
 
 ## first_run — экран нельзя закрыть, пока имя не введено: без него дальше игра
 ## подписывала бы игрока безликим «Игрок».
-func _show_name_screen(first_run: bool) -> void:
+func _show_name_screen(first_run: bool, for_seat: bool = false) -> void:
 	if name_layer == null:
 		name_layer = _build_name_screen()
 		add_child(name_layer)
-	name_input.text = Profile.player_name()
+	_naming_seat = for_seat
+	name_input.text = _roster_name(_seat_name_slot) if for_seat else Profile.player_name()
 	name_error.text = ""
 	name_cancel.visible = not first_run
 	name_layer.visible = true
-	menu_layer.visible = not first_run
+	menu_layer.visible = not first_run and not for_seat
 	name_input.grab_focus()
 
 func _save_name() -> void:
+	if _naming_seat:
+		var typed := Profile.sanitize(name_input.text)
+		if typed == "":
+			name_error.text = "Впиши хотя бы одну букву."
+			return
+		while roster_names.size() <= _seat_name_slot:
+			roster_names.append("")
+		roster_names[_seat_name_slot] = typed
+		_naming_seat = false
+		name_layer.visible = false
+		_roster_refresh()
+		return
 	if not Profile.save_name(name_input.text):
 		name_error.text = "Впиши хотя бы одну букву."
 		return
@@ -2557,7 +2600,7 @@ func _lobby_not_found() -> void:
 func _lobby_manual() -> void:
 	for c in lobby_box.get_children():
 		c.queue_free()
-	var t := _label("АДРЕС СОПЕРНИКА", 18, Palette.GOLD, Palette.FONT_TITLE)
+	var t := _label("АДРЕС ИГРЫ", 18, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lobby_box.add_child(t)
 	var m := _label("Адрес показан на экране того, кто создал игру.", 11, Palette.MUTED)
@@ -3041,30 +3084,35 @@ func _next_round() -> void:
 ## работают с рукой, а она каждый раунд новая. Боты решают сами и молча, живым
 ## показывается экран. По сети ивенты пока не идут: предложение выпадает от сида
 ## одинаково у всех, а вот ЧТО игрок с ним сделает, надо было бы пересылать.
+## Разыграть предложения на раунд.
+##
+## Выпадают они всем сразу и от одного генератора — это честно: у каждого свой
+## ивент, но в одном и том же раунде. А показывается предложение **перед своим
+## ходом** (`_offer_event_for`), а не всем скопом в начале: иначе игрок сперва
+## смотрел четыре чужих окна подряд, а потом уже играл.
 func _events_phase() -> void:
+	pending_events = {}
 	if state.is_empty() or opponent == "remote":
 		return
-	var offers := Events.roll(state)
-	if offers.is_empty():
-		return
-	var tok := flow_token
-	for seat in state["order"]:
-		var key := String(seat)
-		if not offers.has(key):
-			continue
-		var ev: Dictionary = offers[key]
-		if MatchState.seat_is_human(state, key) and MatchState.seat_local(state, key):
-			await _show_event(key, ev)
-		else:
-			var pick := Events.bot_choice(state, key, ev, state["rng"])
-			if not pick.is_empty():
-				_apply_event(key, ev, pick)
-				toast("%s: %s" % [MatchState.seat_name(state, key),
-					_event_done_text(String(ev["kind"]))], true)
-				await get_tree().create_timer(0.8).timeout
-		if tok != flow_token or state.is_empty():
-			return
-	_refresh()
+	pending_events = Events.roll(state)
+
+## Предложение перед ходом этого сиденья. Возвращает true, если экран показывали
+## и после него нужно заново решать, кому открыт экран.
+func _offer_event_for(seat: String) -> bool:
+	if pending_events.is_empty() or not pending_events.has(seat):
+		return false
+	var ev: Dictionary = pending_events[seat]
+	pending_events.erase(seat)
+	if MatchState.seat_is_human(state, seat) and MatchState.seat_local(state, seat):
+		await _show_event(seat, ev)
+		return true
+	var pick := Events.bot_choice(state, seat, ev, state["rng"])
+	if not pick.is_empty():
+		_apply_event(seat, ev, pick)
+		toast("%s: %s" % [MatchState.seat_name(state, seat),
+			_event_done_text(String(ev["kind"]))], true)
+		await get_tree().create_timer(0.7).timeout
+	return false
 
 ## Применить выбор — общий хвост для человека и бота.
 func _apply_event(seat: String, ev: Dictionary, pick: Dictionary) -> Dictionary:
@@ -3100,10 +3148,6 @@ func _show_event(seat: String, ev: Dictionary) -> void:
 	if event_layer == null:
 		event_layer = _build_event()
 		add_child(event_layer)
-	# в хотсите предложение видит только тот, кому оно выпало: соглядатай иначе
-	# показал бы чужую руку прямо сопернику
-	if MatchState.shared_device(state):
-		await _pass_device(seat)
 	_hide_banner()
 	event_done = false
 	event_layer.visible = true
@@ -3112,13 +3156,6 @@ func _show_event(seat: String, ev: Dictionary) -> void:
 		await get_tree().process_frame
 	event_layer.visible = false
 	_refresh()
-
-## Ширма перед чужим предложением: «передай телефон».
-func _pass_device(seat: String) -> void:
-	state["shown_to"] = ""
-	_show_veil(seat)
-	while veil_layer.visible:
-		await get_tree().process_frame
 
 func _event_draw(seat: String, ev: Dictionary, step := "main", ctx := {}) -> void:
 	for c in event_box.get_children():
@@ -3560,6 +3597,7 @@ func _start_mode(key: String, deck: Array = []) -> void:
 	var seed_value := draft_seed if not deck.is_empty() else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
 	roster_for_run = _roster_for_match() if opponent == "roster" else []
 	_announced_out = {}
+	pending_events = {}
 	if opponent == "remote" and lan != null and lan.is_host and lan.table_seats > 2:
 		# Стол на троих и больше: хозяин раздаёт сиденья по порядку подключения,
 		# свободные места занимают боты, и каждому лично уходит его сиденье.
@@ -3627,6 +3665,13 @@ func _launch_match(key: String, seed_value: int, deck: Array = [], roster: Array
 func _begin_turn(seat: String) -> void:
 	selected = -1
 	var tok := flow_token
+	# Предложение — перед ходом того, кому оно выпало, но ПОСЛЕ ширмы: ивент
+	# показывает руку, и в хотсите нельзя открывать его, пока телефон не передали.
+	# Поэтому у ботов и в одиночной игре зовём сразу, а в хотсите — из `_hide_veil`.
+	if pending_events.has(seat) and not MatchState.needs_veil(state, seat):
+		await _offer_event_for(seat)
+		if tok != flow_token or state.is_empty():
+			return
 	if MatchState.seat_kind(state, seat) == "remote":
 		busy = true
 		_refresh()
@@ -3695,6 +3740,17 @@ func _hide_veil() -> void:
 		state["shown_to"] = String(state["turn"])
 	busy = false
 	_refresh_screen()
+	# Телефон передали — теперь можно показать предложение: оно открывает руку, и
+	# до ширмы его увидел бы предыдущий игрок.
+	if not in_durak and not state.is_empty() and pending_events.has(String(state["turn"])):
+		var seat := String(state["turn"])
+		var tok := flow_token
+		await _offer_event_for(seat)
+		if tok != flow_token or state.is_empty():
+			return
+		state["shown_to"] = seat
+		busy = false
+		_refresh()
 
 ## Перерисовка того экрана, который сейчас открыт. Ширма, исходы и меню общие для
 ## боевых режимов и Дуракуба, а состояния у них разные.
@@ -3903,7 +3959,7 @@ func _refresh() -> void:
 	elif _solo(state) and turn == me:
 		turn_who.text = "ТВОЙ ХОД"
 	elif _solo(state):
-		turn_who.text = "ХОД СОПЕРНИКА"
+		turn_who.text = "ХОД: " + MatchState.seat_name(state, turn).to_upper()
 	else:
 		turn_who.text = "ХОД: " + MatchState.seat_name(state, turn).to_upper()
 	turn_who.add_theme_color_override("font_color",
@@ -4083,7 +4139,8 @@ func _update_sel_info(me: String) -> void:
 	if not input_allowed():
 		var turn := String(state["turn"])
 		var k := MatchState.seat_kind(state, turn)
-		sel_info.text = "Соперник думает…" if k == "bot" else ("Ход соперника…" if k == "remote" else "Секунду…")
+		var who_now := MatchState.seat_name(state, String(state["turn"]))
+		sel_info.text = "%s думает…" % who_now if k == "bot" 			else ("Ход игрока %s…" % who_now if k == "remote" else "Секунду…")
 		return
 	if selected >= 0:
 		var hand: Array = state["players"][me]["hand"]
@@ -4210,7 +4267,8 @@ func _solo(st: Dictionary) -> bool:
 func _says(st: Dictionary, seat: String, second: String, third: String) -> String:
 	if _solo(st) and seat == _my_view(st):
 		return "ты " + second
-	var who := "Соперник" if _solo(st) else MatchState.seat_name(st, seat)
+	# Имя, а не «Соперник»: у ботов прозвища, у сетевых игроков — их ники.
+	var who := MatchState.seat_name(st, seat)
 	return "%s %s" % [who, third]
 
 ## Кто смотрит в экран: в хотсите — тот, кому он открыт, иначе своё сиденье.
@@ -4266,7 +4324,7 @@ func _round_phrases(winner: String, detail: String) -> Dictionary:
 	var mine := _my_view(state)
 	var title := ""
 	if _solo(state):
-		title = "РАУНД ТВОЙ!" if winner == mine else "РАУНД ЗА СОПЕРНИКОМ"
+		title = "РАУНД ТВОЙ!" if winner == mine 			else "РАУНД ЗА ИГРОКОМ %s" % MatchState.seat_name(state, winner).to_upper()
 	else:
 		title = MatchState.seat_name(state, winner).to_upper() + " БЕРЁТ РАУНД"
 	# Счёт больше не пишем строкой: он в таблице под заголовком. Здесь остаётся
@@ -4304,7 +4362,7 @@ func _match_phrases(winner: String) -> Dictionary:
 	var title := "НИЧЬЯ"
 	if winner != "":
 		if solo:
-			title = "ПОБЕДА!" if winner == mine else "ПОРАЖЕНИЕ"
+			title = "ПОБЕДА!" if winner == mine else "ПОБЕДИЛ " + MatchState.seat_name(state, winner).to_upper()
 		else:
 			title = MatchState.seat_name(state, winner).to_upper() + " ПОБЕДИЛ!"
 	var text := ""
@@ -4317,7 +4375,7 @@ func _match_phrases(winner: String) -> Dictionary:
 			if winner == "":
 				text = "Жизни кончились у всех разом."
 			elif solo and winner == mine:
-				text = "Враг повержен!" if vs_bot else "Соперник остался без жизней!"
+				text = "%s повержен!" % MatchState.seat_name(state, MatchState.other_seat(state, mine))
 			elif solo:
 				text = "Подземелье забрало твои кости." if vs_bot else "Твои жизни кончились."
 			elif many:
