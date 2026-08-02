@@ -125,6 +125,9 @@ var duel_note: Label
 var duel_count: Label
 var duel_hand: Control          # площадка, откуда игрок бросает свой куб
 var duel_input: Control         # прозрачный слой поверх битвы: ловит свайп
+var event_layer: Control        # экран предложения между раундами
+var event_box: VBoxContainer
+var event_done := false
 var duel_hint: Label
 var duel_throw_from := Vector2.ZERO   # откуда полетел куб после свайпа
 # состояние броска свайпом: только поля, лямбды копируют локальные переменные
@@ -166,6 +169,39 @@ func _report_boot() -> void:
 	# куда ушло время
 	boot_note.text = "запуск: движок %d мс · интерфейс %d мс" % [_boot_ms, ui] if _boot_ms > 5000 else ""
 	print("[boot] движок=%d мс интерфейс=%d мс" % [_boot_ms, ui])
+
+## Системная кнопка «Назад» на Android.
+##
+## По умолчанию Godot на неё просто закрывает приложение (`quit_on_go_back`), а
+## на Magic UI это ещё и свайп от бокового края — случайное движение выбрасывало
+## из партии, а по Wi-Fi рвало игру и соперникам. Теперь кнопка закрывает верхний
+## слой, из партии ведёт в меню, и только из меню верхнего уровня выходит из игры.
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
+		return
+	if rules_layer != null and rules_layer.visible:
+		rules_layer.visible = false
+	elif over_layer != null and over_layer.visible:
+		over_layer.visible = false
+		_show_menu()
+	elif draft_layer != null and draft_layer.visible:
+		draft_layer.visible = false
+		_show_menu()
+	elif roster_layer != null and roster_layer.visible:
+		roster_layer.visible = false
+		_show_menu()
+	elif lobby_layer != null and lobby_layer.visible:
+		lobby_layer.visible = false
+		_show_menu()
+	elif duel_layer != null and duel_layer.visible:
+		pass                      # битва идёт секунды, прерывать её нечем
+	elif menu_layer != null and menu_layer.visible:
+		if modes_box != null and modes_box.visible:
+			_modes_back()         # с режимов — назад по шагам, а не из игры
+		else:
+			get_tree().quit()
+	else:
+		_show_menu()              # из партии — в меню, партия не теряется
 
 ## Вернуть экран на место. Тряска двигает контейнер, и если её оборвало сменой
 ## режима или раунда, интерфейс остался бы съехавшим — управлять им нельзя.
@@ -275,7 +311,10 @@ func _apply_safe_area() -> void:
 	if hand_row != null:
 		hand_row.custom_minimum_size.y = hand_px
 	if card_scroll != null:
-		card_scroll.custom_minimum_size.y = 92 if compact else 116
+		# Резервы держим скупее, чем раньше: всё, что забрано впустую, потом
+		# отбирает `_fit_battle` масштабом у всего экрана разом — а он уменьшает и
+		# кнопки, и таблетки ленты ниже 40 px, за которые велась отдельная борьба.
+		card_scroll.custom_minimum_size.y = 78 if compact else 96
 	_fit_battle()
 	for box in [battle_root, durak_root]:
 		if box == null:
@@ -360,6 +399,10 @@ func _parse_args() -> void:
 			_shot_mode = "duel_hand"
 		elif a == "--shot-duel-swipe":
 			_shot_mode = "duel_swipe"
+		elif a == "--shot-event":
+			_shot_mode = "event"
+		elif a == "--shot-event-buy":
+			_shot_mode = "event_buy"
 		elif a == "--shot-three":
 			_shot_mode = "three"
 		elif a == "--shot-durak3":
@@ -448,7 +491,7 @@ func _build_ui() -> void:
 	root.add_child(_foe_zone())
 	toast_label = _label("", 12, Palette.GOLD_LIGHT)
 	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	toast_label.custom_minimum_size.y = 18
+	toast_label.custom_minimum_size.y = 16
 	root.add_child(toast_label)
 	root.add_child(_turn_bar())
 	board_grid = GridContainer.new()
@@ -463,7 +506,7 @@ func _build_ui() -> void:
 	board_holder = board_wrap
 	sel_info = _label("", 12, Palette.MUTED)
 	sel_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sel_info.custom_minimum_size.y = 32
+	sel_info.custom_minimum_size.y = 22
 	sel_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	root.add_child(sel_info)
 	# лента ходов: таблетки с номером и итогом, тап раскрывает нужную карточку
@@ -471,7 +514,7 @@ func _build_ui() -> void:
 	hist_strip.add_theme_constant_override("separation", 6)
 	hist_strip.custom_minimum_size.y = 40
 	var strip_scroll := ScrollContainer.new()
-	strip_scroll.custom_minimum_size.y = 44
+	strip_scroll.custom_minimum_size.y = 40
 	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	strip_scroll.add_child(hist_strip)
@@ -484,7 +527,7 @@ func _build_ui() -> void:
 	card_box = VBoxContainer.new()
 	card_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card_scroll = ScrollContainer.new()
-	card_scroll.custom_minimum_size.y = 116
+	card_scroll.custom_minimum_size.y = 96
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	card_scroll.add_child(card_box)
@@ -511,6 +554,10 @@ func _build_ui() -> void:
 	# цифры кубов читаются сквозь текст
 	banner_label = _label("", 20, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
 	banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# без переноса панель уезжала за правый край уже на двух именах, а на четырёх
+	# теряла половину строки
+	banner_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	banner_label.custom_minimum_size.x = 210
 	var bpanel := PanelContainer.new()
 	var bsb := StyleBoxFlat.new()
 	bsb.bg_color = Color(0.03, 0.02, 0.05, 0.88)
@@ -536,6 +583,21 @@ func _build_ui() -> void:
 	bcenter.add_child(bpanel)
 	add_child(bcenter)
 	bpanel.modulate.a = 0.0
+
+## Имя игрока. У выбывшего перечёркнуто — обычный Label так не умеет, поэтому
+## для него берём RichTextLabel с `[s]`.
+func _name_label(text: String, col: Color, dead: bool) -> Control:
+	if not dead:
+		return _label(text, 12, col)
+	var rt := RichTextLabel.new()
+	rt.bbcode_enabled = true
+	rt.fit_content = true
+	rt.scroll_active = false
+	rt.autowrap_mode = TextServer.AUTOWRAP_OFF
+	rt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rt.add_theme_font_size_override("normal_font_size", 12)
+	rt.text = "[s][color=#%s]%s[/color][/s]" % [col.to_html(false), text]
+	return rt
 
 ## Спрятать ручку прокрутки, оставив саму прокрутку.
 ##
@@ -587,14 +649,19 @@ func _foe_row(seat: String, compact: bool) -> Control:
 	left.add_theme_constant_override("separation", 2)
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(left)
+	var dead: bool = MatchState.is_out(state, seat)
 	# место под маркер занято всегда, даже когда маркера нет
-	var mark := _label("▶" if String(state["turn"]) == seat else " ", 11, Palette.GOLD_LIGHT)
-	mark.custom_minimum_size.x = 12
+	var mark := _label("💀" if dead else ("▶" if String(state["turn"]) == seat else " "),
+		11, Palette.GOLD_LIGHT)
+	mark.custom_minimum_size.x = 14
 	left.add_child(mark)
-	# имя в цвете лица его кубов: с тремя игроками иначе не понять, кто где
-	var face: Dictionary = Palette.face_of(int(state["order"].find(seat)))
-	var nm := _label(_who_name(state, seat), 12, face["mid"])
+	# имя в цвете лица его кубов: с тремя игроками иначе не понять, кто где.
+	# У выбывшего оно перечёркнуто — он в этой партии больше не ходит
+	var nm := _name_label(_who_name(state, seat),
+		Palette.name_of(int(state["order"].find(seat))), dead)
 	left.add_child(nm)
+	if dead:
+		v.modulate.a = 0.5
 	left.add_child(_grow())
 	var kind := String(state["cfg"]["kind"])
 	var mid := CenterContainer.new()
@@ -1428,7 +1495,7 @@ func _build_menu() -> Control:
 	kind_box.add_child(_kind_button("По Wi-Fi", "с друзьями рядом, в одной сети Wi-Fi", func():
 		_show_lobby()
 	))
-	kind_box.add_child(_kind_button("По сети", "пока не доступно", Callable(), true))
+	kind_box.add_child(_kind_button("По сети", "пока недоступно", Callable(), true))
 	var name_btn := _button("Сменить имя", true)
 	name_btn.pressed.connect(func(): _show_name_screen(false))
 	kind_box.add_child(name_btn)
@@ -1691,9 +1758,12 @@ func _build_duel() -> Control:
 	duel_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	duel_row.add_theme_constant_override("separation", 18)
 	v.add_child(duel_row)
-	duel_count = _label("", 64, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
+	# Стаканчики и отсчёт «три-два-один» убраны по просьбе владельца: бросил —
+	# сразу видишь, что выпало. Прятать значения было нужно только затем, чтобы
+	# их вскрывали разом, а раз вскрытия нет — и прятать нечего.
+	duel_count = _label("", 40, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
 	duel_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	duel_count.custom_minimum_size.y = 80
+	duel_count.custom_minimum_size.y = 46
 	v.add_child(duel_count)
 	# Место, откуда игрок бросает свой куб. Держим его отдельным узлом внизу: куб
 	# на время броска уходит из ряда и летит поверх всего слоя.
@@ -1743,7 +1813,7 @@ func _play_duel(res: Dictionary) -> void:
 	var rounds: Array = res["rounds"]
 	for i in rounds.size():
 		var rolls: Dictionary = rounds[i]
-		duel_note.text = "Бросайте кубы" if i == 0 else "НИЧЬЯ — ПЕРЕБРОС!"
+		duel_note.text = "Бросайте кубы" if i == 0 else "НИЧЬЯ — БРОСАЮТ ЗАНОВО!"
 		if i > 0:
 			buzz(80)
 			_shake(6.0, 0.25)
@@ -1755,11 +1825,13 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 	for c in duel_hand.get_children():
 		c.queue_free()
 	await get_tree().process_frame
-	var cups := []
 	var dice := []
 	var slots := []
 	var me := viewer()
-	for seat in state["order"]:
+	# только те, кто бросает в этом заходе: при перебросе проигравшие уходят
+	var seats: Array = rolls.keys()
+	seats.sort_custom(func(a, b): return state["order"].find(a) < state["order"].find(b))
+	for seat in seats:
 		var col := VBoxContainer.new()
 		col.add_theme_constant_override("separation", 6)
 		duel_row.add_child(col)
@@ -1767,7 +1839,7 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 		# разобрать, где чей стаканчик
 		var seat_no := int(state["order"].find(String(seat)))
 		var face: Dictionary = Palette.face_of(seat_no)
-		var nm := _label(_who_name(state, String(seat)), 11, face["mid"])
+		var nm := _label(_who_name(state, String(seat)), 11, Palette.name_of(seat_no))
 		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		col.add_child(nm)
 		# куб и стаканчик лежат в одной ячейке: стакан просто выше по слою
@@ -1781,7 +1853,9 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 		var pad_sb := StyleBoxFlat.new()
 		pad_sb.bg_color = Color(0, 0, 0, 0.28)
 		pad_sb.set_corner_radius_all(12)
-		pad_sb.border_color = Color(face["mid"], 0.55)
+		# рамка гнезда — по цвету имени: грань куба на тёмном слое давала 1.49:1,
+		# и гнездо просто не читалось
+		pad_sb.border_color = Color(Palette.name_of(seat_no), 0.7)
 		pad_sb.set_border_width_all(2)
 		pad_rect.add_theme_stylebox_override("panel", pad_sb)
 		pad_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1795,74 +1869,42 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 		d.custom_minimum_size = Vector2(48, 48)
 		d.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		d.visible = false          # появится, когда куб долетит до места
-		# и появится рубашкой: до подъёма стаканчиков значений не видно ни своего,
-		# ни чужих — иначе исход битвы читается заранее и она теряет смысл
-		d.face_down = true
 		slot.add_child(d)
 		d.setup(int(rolls[seat]), "basic", String(seat) == "p", false, 0, seat_no)
 		dice.append(d)
-		var cup := CupView.new()
-		cup.size = Vector2(84, 96)
-		cup.custom_minimum_size = Vector2(84, 96)
-		cup.visible = false
-		slot.add_child(cup)
-		cups.append(cup)
 	await get_tree().process_frame
 
 	# Бросают все, но свой куб игрок кидает сам — свайпом. Без этого битва была
 	# «нажми и посмотри, что выпало»: результат тот же, а ощущение — что игру
 	# разыграли за тебя.
-	for i in state["order"].size():
-		var seat := String(state["order"][i])
+	for i in seats.size():
+		var seat := String(seats[i])
 		var value := int(rolls[seat])
 		var mine: bool = seat == me and MatchState.seat_is_human(state, seat) \
 			and MatchState.seat_local(state, seat)
 		var power := 0.45 + rng.randf() * 0.35
 		if mine:
 			duel_hint.text = "Тяни куб и брось — как настоящий"
-			power = await _await_throw(value, i)
+			power = await _await_throw(value, i, slots[i])
 			duel_hint.text = ""
 		await _fly_die(value, i, slots[i], dice[i], power, mine)
-		cups[i].visible = true
-		cups[i].position.y = -140.0
-		cups[i].modulate.a = 1.0
-		var drop := create_tween()
-		drop.tween_property(cups[i], "position:y", 0.0, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
-		buzz(18)
-		await get_tree().create_timer(0.18).timeout
-	duel_note.text = "Все бросили. Кто больше?"
-	await get_tree().create_timer(0.25).timeout
-
-	# отсчёт: три, два, один
-	for n in [3, 2, 1]:
-		duel_count.text = str(n)
-		duel_count.pivot_offset = duel_count.size * 0.5
-		duel_count.scale = Vector2(1.5, 1.5)
-		var tw := create_tween()
-		tw.tween_property(duel_count, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK)
-		buzz(25)
-		await get_tree().create_timer(0.55).timeout
-	duel_count.text = ""
-
-	# стаканчики поднимаются разом
-	buzz(60)
-	for cup in cups:
-		var tw2 := create_tween().set_parallel(true)
-		tw2.tween_property(cup, "position:y", -70.0, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw2.tween_property(cup, "modulate:a", 0.0, 0.32)
-	await get_tree().create_timer(0.4).timeout
-	# вот теперь значения: кубы лежали рубашкой всю битву
-	for i in dice.size():
-		var d: DieView = dice[i]
-		d.face_down = false
-		d.setup(int(rolls[state["order"][i]]), "basic", String(state["order"][i]) == "p",
-			false, 0, i)
-		d.play_place()
+		await get_tree().create_timer(0.12).timeout
+	await get_tree().create_timer(0.35).timeout
 	if last:
 		# «ТЫ ходит первым» — та же ошибка, что когда-то с «Ты теряет ♥»: фраза
 		# строилась в третьем лице, а имя своего сиденья «Ты»
 		var says := _says(state, winner, "ходишь первым!", "ходит первым!")
 		duel_note.text = says.substr(0, 1).to_upper() + says.substr(1)
+		# выигравшее гнездо обводим золотом: по одним цифрам не сразу видно, чей верх
+		var wi := seats.find(winner)
+		if wi >= 0 and wi < slots.size():
+			var win_sb := StyleBoxFlat.new()
+			win_sb.bg_color = Color(Palette.GOLD, 0.12)
+			win_sb.set_corner_radius_all(12)
+			win_sb.border_color = Palette.GOLD
+			win_sb.set_border_width_all(3)
+			var pad_node: Panel = slots[wi].get_child(0)
+			pad_node.add_theme_stylebox_override("panel", win_sb)
 		_flash_screen(Color(1, 0.82, 0.35, 0.25), 0.4)
 		buzz(120)
 	await get_tree().create_timer(0.9 if last else 0.5).timeout
@@ -1878,7 +1920,7 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 ##
 ## Тап без движения тоже засчитывается слабым броском: не у всех выходит свайп,
 ## и вставать из-за этого игра не должна. Через восемь секунд бросаем сами.
-func _await_throw(value: int, idx: int) -> float:
+func _await_throw(value: int, idx: int, slot: Control = null) -> float:
 	var d := DieView.new()
 	d.size = Vector2(64, 64)
 	d.custom_minimum_size = Vector2(64, 64)
@@ -2008,13 +2050,15 @@ func _fly_die(value: int, idx: int, slot: Control, target: DieView, power: float
 	d.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	d.pivot_offset = Vector2(24, 24)
 	d.position = from
-	# летящий куб настоящего значения не показывает НИ РАЗУ, даже первым кадром:
-	# оно откроется под стаканчиком
-	d.setup(rng.randi_range(1, 6), "basic", idx == 0, false, 0, idx)
+	# Куб летит уже правильной стороной вверх: прятать значение до приземления
+	# было нужно ради стаканчиков, а их больше нет.
+	d.setup(value, "basic", idx == 0, false, 0, idx)
 	duel_layer.add_child(d)
 	var dur := clampf(0.78 - power * 0.26, 0.44, 0.86)
 	var arc := clampf(70.0 + power * 190.0, 70.0, 260.0)
-	var spins := clampf(1.2 + power * 3.0, 1.2, 4.2) * (1.0 if rng.randf() < 0.5 else -1.0)
+	# Оборотов ЦЕЛОЕ число, иначе куб садится наклонённым — «упал неправильной
+	# стороной». Сила броска решает, сколько их будет.
+	var spins := float(roundi(clampf(1.0 + power * 3.0, 1.0, 4.0))) 		* (1.0 if rng.randf() < 0.5 else -1.0)
 	var tw := create_tween().set_parallel(true)
 	tw.tween_method(func(t: float):
 		if is_instance_valid(d):
@@ -2022,18 +2066,9 @@ func _fly_die(value: int, idx: int, slot: Control, target: DieView, power: float
 	, 0.0, 1.0, dur)
 	tw.tween_property(d, "rotation", TAU * spins, dur).set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 	buzz(20 if not mine else 35)
-	# значения мельтешат, пока куб в воздухе
-	var flip := 0.0
-	while flip < dur - 0.08:
-		var step := 0.05 + flip * 0.12          # к концу полёта смена замедляется
-		await get_tree().create_timer(step).timeout
-		flip += step
-		if is_instance_valid(d):
-			d.setup(rng.randi_range(1, 6), "basic", idx == 0, false, 0, idx)
-	await get_tree().create_timer(maxf(0.0, dur - flip)).timeout
+	await get_tree().create_timer(dur).timeout
 	if is_instance_valid(d):
 		d.queue_free()
-	# на месте куба остаётся рубашка: значение ждёт подъёма стаканчика
 	target.visible = true
 	target.play_place()
 	_shake(3.0, 0.12)
@@ -2789,7 +2824,304 @@ func _next_round() -> void:
 	_refresh()
 	_relayout_soon()
 	banner("РАУНД %d" % int(state["round"]))
+	await _events_phase()
+	if state.is_empty():
+		return
 	_begin_turn(String(state["turn"]))
+
+## Фаза ивентов: раз в несколько раундов игрокам выпадают предложения купить
+## преимущество за накопленные очки.
+##
+## Идёт в начале раунда, когда руки уже розданы: три предложения из четырёх
+## работают с рукой, а она каждый раунд новая. Боты решают сами и молча, живым
+## показывается экран. По сети ивенты пока не идут: предложение выпадает от сида
+## одинаково у всех, а вот ЧТО игрок с ним сделает, надо было бы пересылать.
+func _events_phase() -> void:
+	if state.is_empty() or opponent == "remote":
+		return
+	var offers := Events.roll(state)
+	if offers.is_empty():
+		return
+	var tok := flow_token
+	for seat in state["order"]:
+		var key := String(seat)
+		if not offers.has(key):
+			continue
+		var ev: Dictionary = offers[key]
+		if MatchState.seat_is_human(state, key) and MatchState.seat_local(state, key):
+			await _show_event(key, ev)
+		else:
+			var pick := Events.bot_choice(state, key, ev, state["rng"])
+			if not pick.is_empty():
+				_apply_event(key, ev, pick)
+				toast("%s: %s" % [MatchState.seat_name(state, key),
+					String(Events.INFO[String(ev["kind"])]["title"]).to_lower()], true)
+				await get_tree().create_timer(0.8).timeout
+		if tok != flow_token or state.is_empty():
+			return
+	_refresh()
+
+## Применить выбор — общий хвост для человека и бота.
+func _apply_event(seat: String, ev: Dictionary, pick: Dictionary) -> Dictionary:
+	match String(pick.get("act", "")):
+		"buy":
+			return Events.apply_buy(state, seat, ev["offer"], int(pick["idx"]))
+		"reroll":
+			return Events.apply_reroll(state, seat, int(pick["idx"]), int(pick["value"]))
+		"spy":
+			return Events.apply_spy(state, seat, String(pick["target"]))
+		"swap":
+			return Events.apply_swap(state, seat, int(pick["idx"]),
+				String(pick["target"]), int(pick["their"]))
+		"ward":
+			return Events.apply_ward(state, seat)
+	return {}
+
+func _build_event() -> Control:
+	var layer := _full_dim(0.95)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := _panel(Palette.PANEL_2)
+	center.add_child(panel)
+	event_box = VBoxContainer.new()
+	event_box.add_theme_constant_override("separation", 8)
+	event_box.custom_minimum_size.x = 320
+	panel.add_child(event_box)
+	return layer
+
+## Экран предложения. Ждёт, пока игрок решит: купить, взять оберег или отказаться.
+func _show_event(seat: String, ev: Dictionary) -> void:
+	if event_layer == null:
+		event_layer = _build_event()
+		add_child(event_layer)
+	# в хотсите предложение видит только тот, кому оно выпало: соглядатай иначе
+	# показал бы чужую руку прямо сопернику
+	if MatchState.shared_device(state):
+		await _pass_device(seat)
+	_hide_banner()
+	event_done = false
+	event_layer.visible = true
+	_event_draw(seat, ev)
+	while not event_done:
+		await get_tree().process_frame
+	event_layer.visible = false
+	_refresh()
+
+## Ширма перед чужим предложением: «передай телефон».
+func _pass_device(seat: String) -> void:
+	state["shown_to"] = ""
+	_show_veil(seat)
+	while veil_layer.visible:
+		await get_tree().process_frame
+
+func _event_draw(seat: String, ev: Dictionary, step := "main", ctx := {}) -> void:
+	for c in event_box.get_children():
+		c.queue_free()
+	var kind := String(ev["kind"])
+	var info: Dictionary = Events.INFO[kind]
+	var cost := Events.cost_of(kind)
+	var money := Events.funds(state, seat)
+
+	var t := _label(String(info["title"]), 22, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	event_box.add_child(t)
+	if MatchState.shared_device(state):
+		var who := _label(MatchState.seat_name(state, seat), 12,
+			Palette.name_of(int(state["order"].find(seat))))
+		who.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		event_box.add_child(who)
+	var d := _label(String(info["text"]), 12, Palette.TEXT)
+	d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	d.custom_minimum_size.x = 300
+	event_box.add_child(d)
+	var price := _label("Цена %d · у тебя %d" % [cost, money], 13,
+		Palette.GOLD_LIGHT if money >= cost else Palette.NEG, Palette.FONT_UI)
+	price.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	event_box.add_child(price)
+
+	if money < cost and step == "main":
+		var poor := _label("Очков не хватает — в другой раз.", 12, Palette.MUTED)
+		poor.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		event_box.add_child(poor)
+	else:
+		match kind:
+			"buy": _event_buy(seat, ev)
+			"reroll": _event_reroll(seat, ev, step, ctx)
+			"spy": _event_spy(seat, ev, step, ctx)
+			"swap": _event_swap(seat, ev, step, ctx)
+
+	if step == "main":
+		var ward := _button("Оберег за %d — закрыть свою руку" % Events.WARD_COST, true)
+		ward.disabled = not Events.can_afford(state, seat, Events.WARD_COST) \
+			or Events.warded(state, seat)
+		ward.modulate.a = 1.0 if not ward.disabled else 0.5
+		ward.pressed.connect(func():
+			_apply_event(seat, ev, {"act": "ward"})
+			toast("Оберег куплен: до следующего ивента твою руку не тронут")
+			event_done = true
+		)
+		event_box.add_child(ward)
+	var no := _button("Отказаться" if step == "main" else "Назад", true)
+	no.pressed.connect(func():
+		if step == "main":
+			event_done = true
+		else:
+			_event_draw(seat, ev, "main")
+	)
+	event_box.add_child(no)
+
+## Торговец: три куба на выбор.
+func _event_buy(seat: String, ev: Dictionary) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 10)
+	event_box.add_child(row)
+	var offer: Array = ev["offer"]
+	for i in offer.size():
+		var die: Dictionary = offer[i]
+		var d := DieView.new()
+		d.custom_minimum_size = Vector2(62, 62)
+		d.clickable = true
+		d.setup(int(die["value"]), String(die["type"]), true, true, 0,
+			int(state["order"].find(seat)))
+		d.pressed.connect(func(_x):
+			var res := _apply_event(seat, ev, {"act": "buy", "idx": i})
+			if bool(res.get("ok", false)):
+				toast("Куплен куб — он уже в руке")
+			event_done = true
+		)
+		row.add_child(d)
+
+## Точильщик: свой куб, потом новое значение.
+func _event_reroll(seat: String, ev: Dictionary, step: String, ctx: Dictionary) -> void:
+	var hand: Array = state["players"][seat]["hand"]
+	if step == "main":
+		event_box.add_child(_event_hint("Какой куб точим?"))
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 8)
+		event_box.add_child(row)
+		for i in hand.size():
+			var d := DieView.new()
+			d.custom_minimum_size = Vector2(56, 56)
+			d.clickable = true
+			d.setup(int(hand[i]["value"]), String(hand[i]["type"]), true, true, 0,
+				int(state["order"].find(seat)))
+			d.pressed.connect(func(_x): _event_draw(seat, ev, "value", {"idx": i}))
+			row.add_child(d)
+		return
+	event_box.add_child(_event_hint("Какое значение поставить?"))
+	var vals := HBoxContainer.new()
+	vals.alignment = BoxContainer.ALIGNMENT_CENTER
+	vals.add_theme_constant_override("separation", 6)
+	event_box.add_child(vals)
+	for v in range(1, 7):
+		var b := _button(str(v))
+		b.custom_minimum_size = Vector2(42, 42)
+		b.pressed.connect(func():
+			_apply_event(seat, ev, {"act": "reroll", "idx": int(ctx["idx"]), "value": v})
+			toast("Куб сточен до %d" % v)
+			event_done = true
+		)
+		vals.add_child(b)
+
+## Соглядатай: выбрать соперника и посмотреть его руку.
+func _event_spy(seat: String, ev: Dictionary, step: String, ctx: Dictionary) -> void:
+	if step == "main":
+		event_box.add_child(_event_hint("Чью руку смотрим?"))
+		for foe in Events.rivals(state, seat):
+			event_box.add_child(_event_foe_button(foe, func():
+				var res := _apply_event(seat, ev, {"act": "spy", "target": foe})
+				_event_draw(seat, ev, "shown", {"target": foe, "res": res})
+			))
+		return
+	var res: Dictionary = ctx["res"]
+	if bool(res.get("blocked", false)):
+		event_box.add_child(_event_hint("Рука закрыта оберегом — ничего не видно."))
+	else:
+		event_box.add_child(_event_hint("Рука игрока %s:"
+			% MatchState.seat_name(state, String(ctx["target"]))))
+		event_box.add_child(_event_hand_row(String(ctx["target"]), res["hand"], Callable()))
+	var ok := _button("Запомнил")
+	ok.pressed.connect(func(): event_done = true)
+	event_box.add_child(ok)
+
+## Меняла: свой куб → соперник → его куб.
+func _event_swap(seat: String, ev: Dictionary, step: String, ctx: Dictionary) -> void:
+	var hand: Array = state["players"][seat]["hand"]
+	if step == "main":
+		event_box.add_child(_event_hint("Какой свой куб отдаём?"))
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 8)
+		event_box.add_child(row)
+		for i in hand.size():
+			var d := DieView.new()
+			d.custom_minimum_size = Vector2(56, 56)
+			d.clickable = true
+			d.setup(int(hand[i]["value"]), String(hand[i]["type"]), true, true, 0,
+				int(state["order"].find(seat)))
+			d.pressed.connect(func(_x): _event_draw(seat, ev, "who", {"mine": i}))
+			row.add_child(d)
+		return
+	if step == "who":
+		event_box.add_child(_event_hint("С кем меняемся?"))
+		for foe in Events.rivals(state, seat):
+			event_box.add_child(_event_foe_button(foe, func():
+				_event_draw(seat, ev, "their", {"mine": int(ctx["mine"]), "target": foe})
+			))
+		return
+	var target := String(ctx["target"])
+	if Events.warded(state, target):
+		event_box.add_child(_event_hint("Рука закрыта оберегом — меняться не с чем."))
+		var back := _button("Ясно")
+		back.pressed.connect(func():
+			_apply_event(seat, ev, {"act": "swap", "idx": int(ctx["mine"]),
+				"target": target, "their": 0})
+			event_done = true
+		)
+		event_box.add_child(back)
+		return
+	event_box.add_child(_event_hint("Что берём взамен?"))
+	event_box.add_child(_event_hand_row(target, state["players"][target]["hand"],
+		func(i: int):
+			_apply_event(seat, ev, {"act": "swap", "idx": int(ctx["mine"]),
+				"target": target, "their": i})
+			toast("Обмен состоялся")
+			event_done = true
+	))
+
+func _event_hint(text: String) -> Control:
+	var l := _label(text, 12, Palette.MUTED)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size.x = 300
+	return l
+
+func _event_foe_button(foe: String, on_press: Callable) -> Control:
+	var b := _button(MatchState.seat_name(state, foe))
+	b.pressed.connect(on_press)
+	return b
+
+## Ряд чужих кубов. `on_pick` пустой — только показать.
+func _event_hand_row(seat: String, hand: Array, on_pick: Callable) -> Control:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	for i in hand.size():
+		var die: Dictionary = hand[i]
+		var d := DieView.new()
+		d.custom_minimum_size = Vector2(56, 56)
+		d.clickable = on_pick.is_valid()
+		# в чужой руке видно всё, включая ловушки: за это и платят
+		d.setup(int(die["value"]), String(die["type"]), false, true, 0,
+			int(state["order"].find(seat)))
+		if on_pick.is_valid():
+			d.pressed.connect(func(_x): on_pick.call(i))
+		row.add_child(d)
+	return row
 
 func _build_rules() -> Control:
 	var layer := _full_dim(0.96)
@@ -2825,7 +3157,7 @@ func _build_rules() -> Control:
 	rb.add_child(_rules_line("Лесенка — подряд идущие значения: три +10, четыре +20, пять +35. Годятся и кубы из пары: 3, 3, 4, 5 — это лесенка."))
 	rb.add_child(_rules_line("Считается только ЛУЧШАЯ комбинация, а не все сразу: 4, 4, 4, 5, 6 дают сет +15, а не сет с лесенкой."))
 	rb.add_child(_rules_line("Комбо начисляется каждый ход, пока кубы стоят на поле. Поэтому ранний ход стоит дороже позднего: он успеет принести доход много раз."))
-	rb.add_child(_rules_line("Тот, кто ходит в раунде первым, получает +8 очков: отвечать выгоднее, чем начинать."))
+	rb.add_child(_rules_line("Тот, кто ходит в раунде первым, получает +%d очков" % Rules.FIRST_MOVE_KOMI + ": отвечать выгоднее, чем начинать."))
 	rb.add_child(_rules_head("Режимы"))
 	rb.add_child(_rules_line("Классика и Большая доска — три жизни, жизнь теряет проигравший раунд."))
 	rb.add_child(_rules_line("Своя колода — три раунда одной колодой, раунд берёт тот, у кого больше очков."))
@@ -3110,7 +3442,11 @@ func _hide_banner() -> void:
 	if panel != null:
 		panel.modulate.a = 0.0
 
-func _show_result(title: String, detail: String, button: String, on_press: Callable) -> void:
+## Итог раунда или матча. `table` — показывать ли таблицу игроков: списком «Счёт:
+## Скелетина 74 · Костолом 34 · Ты 11» на четверых уже ничего не понять, нужны
+## строки с очками и жизнями и подсвеченный победитель.
+func _show_result(title: String, detail: String, button: String, on_press: Callable,
+		table_winner := "", table := false) -> void:
 	_hide_banner()
 	var box: VBoxContainer = over_layer.get_node("CenterContainer/Panel/Box") if over_layer.has_node("CenterContainer/Panel/Box") else null
 	if box == null:
@@ -3126,11 +3462,14 @@ func _show_result(title: String, detail: String, button: String, on_press: Calla
 	t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	t.custom_minimum_size.x = 300
 	box.add_child(t)
-	var d := _label(detail, 13, Palette.TEXT)
-	d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	d.custom_minimum_size.x = 300
-	box.add_child(d)
+	if detail != "":
+		var d := _label(detail, 13, Palette.TEXT)
+		d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		d.custom_minimum_size.x = 300
+		box.add_child(d)
+	if table and not state.is_empty():
+		box.add_child(_score_table(table_winner))
 	# В сетевой игре раунд двигает только хост: если кнопку нажмут оба, раунд
 	# продвинется дважды и состояния разъедутся.
 	var client_waits: bool = opponent == "remote" and lan != null and not lan.is_host and button != "В меню"
@@ -3153,6 +3492,80 @@ func _show_result(title: String, detail: String, button: String, on_press: Calla
 		box.add_child(m)
 	over_layer.visible = true
 
+## Таблица итогов: кто сколько набрал и сколько сердец осталось. Победитель
+## наверху и подсвечен, выбывшие — с черепом и перечёркнутым именем.
+func _score_table(winner: String) -> Control:
+	var cfg: Dictionary = state["cfg"]
+	var by_count: bool = String(cfg.get("win_by", "")) == "count"
+	var kind := String(cfg["kind"])
+	var rows := []
+	for seat in state["order"]:
+		rows.append({
+			"seat": String(seat),
+			"v": MatchState.round_value(state, String(seat)),
+			"out": MatchState.is_out(state, String(seat)),
+		})
+	# победитель первым, выбывшие в самом низу
+	rows.sort_custom(func(a, b):
+		if bool(a["out"]) != bool(b["out"]):
+			return not bool(a["out"])
+		return int(a["v"]) > int(b["v"]))
+
+	var grid := VBoxContainer.new()
+	grid.add_theme_constant_override("separation", 4)
+	var head := HBoxContainer.new()
+	head.add_child(_col(_label("ИГРОК", 10, Palette.MUTED), 3))
+	head.add_child(_col(_label("УДЕРЖАНО" if by_count else "ОЧКИ", 10, Palette.MUTED, "", HORIZONTAL_ALIGNMENT_RIGHT), 2))
+	if kind == "lives":
+		head.add_child(_col(_label("♥", 10, Palette.MUTED, "", HORIZONTAL_ALIGNMENT_RIGHT), 1))
+	elif kind == "bo3":
+		head.add_child(_col(_label("ПОБЕД", 10, Palette.MUTED, "", HORIZONTAL_ALIGNMENT_RIGHT), 1))
+	grid.add_child(head)
+
+	for r in rows:
+		var seat := String(r["seat"])
+		var dead: bool = bool(r["out"])
+		var win: bool = seat == winner and winner != ""
+		var line := PanelContainer.new()
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(Palette.GOLD, 0.14) if win else Color(0, 0, 0, 0.22)
+		sb.set_corner_radius_all(8)
+		sb.content_margin_left = 8
+		sb.content_margin_right = 8
+		sb.content_margin_top = 5
+		sb.content_margin_bottom = 5
+		if win:
+			sb.border_color = Palette.GOLD
+			sb.set_border_width_all(1)
+		line.add_theme_stylebox_override("panel", sb)
+		var row := HBoxContainer.new()
+		line.add_child(row)
+		var who := ("👑 " if win else ("💀 " if dead else "")) + MatchState.seat_name(state, seat)
+		row.add_child(_col(_name_label(who,
+			Palette.name_of(int(state["order"].find(seat))), dead), 3))
+		row.add_child(_col(_label(str(int(r["v"])), 15, Palette.GOLD_LIGHT if win else Palette.TEXT,
+			Palette.FONT_UI, HORIZONTAL_ALIGNMENT_RIGHT), 2))
+		if kind == "lives":
+			var hearts := LifeRow.new()
+			hearts.setup(Rules.LIVES_MAX, int(state["players"][seat]["lives"]))
+			var wrap := HBoxContainer.new()
+			wrap.alignment = BoxContainer.ALIGNMENT_END
+			wrap.add_child(hearts)
+			row.add_child(_col(wrap, 1))
+		elif kind == "bo3":
+			row.add_child(_col(_label(str(int(state["players"][seat]["wins"])), 13,
+				Palette.TEXT, Palette.FONT_UI, HORIZONTAL_ALIGNMENT_RIGHT), 1))
+		if dead:
+			line.modulate.a = 0.55
+		grid.add_child(line)
+	return grid
+
+## Ячейка таблицы заданной доли ширины.
+func _col(node: Control, ratio: float) -> Control:
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	node.size_flags_stretch_ratio = ratio
+	return node
+
 # ------------------------------------------------------------- отображение
 
 func _refresh() -> void:
@@ -3161,7 +3574,7 @@ func _refresh() -> void:
 	var cfg: Dictionary = state["cfg"]
 	var me := viewer()
 	my_name.text = MatchState.seat_name(state, me).to_upper()
-	my_name.add_theme_color_override("font_color", Palette.face_of(int(state["order"].find(me)))["mid"])
+	my_name.add_theme_color_override("font_color", Palette.name_of(int(state["order"].find(me))))
 	var kind := String(cfg["kind"])
 	_roll_score(my_score, me, kind, cfg)
 	my_score.add_theme_color_override("font_color",
@@ -3458,10 +3871,10 @@ func _after_move() -> void:
 				busy = true
 				var fin := _match_phrases(String(final["winner"]))
 				_show_result(String(fin["title"]), String(fin["text"]), "Ещё раз",
-					func(): _start_mode(String(state["mode"])))
+					func(): _start_mode(String(state["mode"])), String(final["winner"]), true)
 				return
 			busy = true
-			var rp := _round_phrases(String(out["winner"]), String(out["detail"]))
+			var rp := _round_phrases(String(out["winner"]), "")
 			await _round_fanfare(String(out["winner"]), String(out["detail"]))
 			if tok != flow_token:
 				return
@@ -3474,7 +3887,7 @@ func _after_move() -> void:
 				if opponent == "remote" and lan != null and lan.connected:
 					lan.send_next_round()
 				_next_round()
-			)
+			, String(out["winner"]), true)
 		"pass":
 			toast("%s: нет ходов — пас" % MatchState.seat_name(state, String(ev["seat"])),
 				String(ev["seat"]) != viewer())
@@ -3550,19 +3963,31 @@ func _round_fanfare(winner: String, detail: String) -> void:
 func _round_phrases(winner: String, detail: String) -> Dictionary:
 	if winner == "":
 		return {"title": "НИЧЬЯ В РАУНДЕ", "text": detail + " — никто не теряет ♥"}
-	var loser := MatchState.other_seat(state, winner)
 	var mine := _my_view(state)
 	var title := ""
 	if _solo(state):
 		title = "РАУНД ТВОЙ!" if winner == mine else "РАУНД ЗА СОПЕРНИКОМ"
 	else:
 		title = MatchState.seat_name(state, winner).to_upper() + " БЕРЁТ РАУНД"
+	# Счёт больше не пишем строкой: он в таблице под заголовком. Здесь остаётся
+	# только правило — что произошло с сердцами.
 	var text := detail
+	var many: bool = state["order"].size() > 2
 	if String(state["cfg"]["kind"]) == "lives":
-		text = "%s — %s ♥" % [detail, _says(state, loser, "теряешь", "теряет")]
-	elif String(state["cfg"]["kind"]) == "bo3":
-		text = "%s · победы %d : %d" % [detail,
-			int(state["players"]["p"]["wins"]), int(state["players"]["e"]["wins"])]
+		# Втроём и вчетвером сердце теряет каждый, кроме взявшего раунд, — фраза
+		# про одного проигравшего описывала правило неверно, а `other_seat` вообще
+		# называл соседа по кругу
+		if many:
+			text = "♥ теряют все, кроме победителя"
+		else:
+			text = "%s ♥" % _cap(_says(state, MatchState.other_seat(state, winner),
+				"теряешь", "теряет"))
+	var gone := []
+	for seat in state["order"]:
+		if MatchState.is_out(state, String(seat)):
+			gone.append(MatchState.seat_name(state, String(seat)))
+	if not gone.is_empty():
+		text += "\n💀 выбывает: %s" % ", ".join(gone)
 	return {"title": title, "text": text}
 
 ## Фразы конца матча. «Победа / Жизни 3:0» звучало как отчёт судьи, поэтому
@@ -3579,37 +4004,61 @@ func _match_phrases(winner: String) -> Dictionary:
 		else:
 			title = MatchState.seat_name(state, winner).to_upper() + " ПОБЕДИЛ!"
 	var text := ""
+	# Втроём и вчетвером «другой игрок» — это не сосед по кругу, а список. Раньше
+	# все хвосты звали `other_seat`, и в партии на четверых без жизней объявляли
+	# не того, а счёт показывали только у первых двух сидений.
+	var many: bool = state["order"].size() > 2
 	match kind:
 		"lives":
-			var loser := MatchState.other_seat(state, winner) if winner != "" else ""
 			if winner == "":
-				text = "Жизни кончились у обоих одновременно."
+				text = "Жизни кончились у всех разом."
 			elif solo and winner == mine:
 				text = "Враг повержен!" if vs_bot else "Соперник остался без жизней!"
 			elif solo:
 				text = "Подземелье забрало твои кости." if vs_bot else "Ты остался без жизней."
+			elif many:
+				text = "%s дошёл до конца с %s." % [MatchState.seat_name(state, winner),
+					_lives_word(int(state["players"][winner]["lives"]))]
 			else:
-				text = "%s остался без жизней." % MatchState.seat_name(state, loser)
+				text = "%s остался без жизней." % MatchState.seat_name(state,
+					MatchState.other_seat(state, winner))
 		"race":
 			var target := int(state["cfg"]["target"])
-			var sp := int(state["players"]["p"]["score"])
-			var se := int(state["players"]["e"]["score"])
+			var tally := _tally("score")
 			if winner == "":
-				text = "Ничья: %d : %d" % [sp, se]
+				text = "Ничья: %s" % tally
 			else:
-				text = "%s до %d! Итог %d : %d" % [_cap(_says(state, winner, "добежал", "добежал")),
-					target, sp, se]
+				text = "%s до %d! Итог: %s" % [_cap(_says(state, winner, "добежал", "добежал")),
+					target, tally]
 		_:
-			var wp := int(state["players"]["p"]["wins"])
-			var we := int(state["players"]["e"]["wins"])
-			if wp != we and winner != "":
-				var w := maxi(wp, we)
+			var top := 0
+			var shared := false
+			for seat in state["order"]:
+				var w := int(state["players"][seat]["wins"])
+				if w > top:
+					top = w
+					shared = false
+				elif w == top:
+					shared = true
+			if not shared and winner != "":
 				text = "%s %d %s из 3." % [_cap(_says(state, winner, "взял", "взял")),
-					w, _plural(w, "раунд", "раунда", "раундов")]
+					top, _plural(top, "раунд", "раунда", "раундов")]
 			else:
-				text = "Раунды поделили %d : %d, решили очки за матч: %d : %d" % [wp, we,
-					int(state["players"]["p"]["total"]), int(state["players"]["e"]["total"])]
+				text = "Раунды поделили (%s), решили очки за матч: %s" % [
+					_tally("wins"), _tally("total")]
 	return {"title": title, "text": text}
+
+## Счёт по всем сиденьям с именами: «Руслан 320 · Костолом 285». На двоих это
+## прежнее «320 : 285», только подписанное, а на четверых иначе не понять, где чей.
+func _tally(field: String) -> String:
+	var parts := []
+	for seat in state["order"]:
+		parts.append("%s %d" % [MatchState.seat_name(state, String(seat)),
+			int(state["players"][seat][field])])
+	return " · ".join(parts)
+
+func _lives_word(n: int) -> String:
+	return "%d %s" % [n, _plural(n, "жизнью", "жизнями", "жизнями")]
 
 ## Первая буква заглавной. `String.capitalize()` не годится: он поднимает каждое
 ## слово — «Ты Добежал».
@@ -4231,6 +4680,19 @@ func _shot_scenario() -> void:
 			opponent = "bot"
 			_start_mode("classic")
 			await get_tree().create_timer(0.5).timeout
+		"event", "event_buy":
+			# предложение выпадает со второго раунда и стоит очков — выставляем оба
+			opponent = "bot"
+			_start_mode("classic")
+			await get_tree().create_timer(0.2).timeout
+			state["round"] = 2
+			state["players"]["p"]["total"] = 200
+			var kind := "buy" if _shot_mode == "event_buy" else "swap"
+			var offer := []
+			for i in 3:
+				offer.append(MatchState.random_die(state["rng"]))
+			_show_event("p", {"kind": kind, "offer": offer})
+			await get_tree().create_timer(0.4).timeout
 		"duel_swipe":
 			# проверка свайпа без человека: шлём касание, тянем вверх, отпускаем
 			opponent = "bot"
@@ -4428,7 +4890,8 @@ func _shot_scenario() -> void:
 				state["players"][seat]["moves"] = int(state["cfg"]["moves"])
 			veil_layer.visible = false
 			_after_move()
-			await get_tree().process_frame
+			# ждём фанфару: таблица итогов появляется после неё
+			await get_tree().create_timer(2.6).timeout
 		"veil":
 			opponent = "human"
 			_start_mode("classic")
@@ -4464,9 +4927,11 @@ func _shot_scenario() -> void:
 
 # ------------------------------------------------------------ вспомогательное
 
-func _label(text: String, size_px: int, col: Color, font_path: String = "") -> Label:
+func _label(text: String, size_px: int, col: Color, font_path: String = "",
+		align := HORIZONTAL_ALIGNMENT_LEFT) -> Label:
 	var l := Label.new()
 	l.text = text
+	l.horizontal_alignment = align
 	l.add_theme_font_size_override("font_size", size_px)
 	l.add_theme_color_override("font_color", col)
 	if font_path != "" and ResourceLoader.exists(font_path):

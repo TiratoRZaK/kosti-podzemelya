@@ -673,6 +673,10 @@ function newRound(){
   while(S.pHand.length<3&&S.pDeck.length)S.pHand.push(S.pDeck.pop());
   while(S.eHand.length<3&&S.eDeck.length)S.eHand.push(S.eDeck.pop());
   S.turn=S.firstP?'p':'e';
+  // Ленту чистим ДО начисления компенсации: ниже стояло S.history=[], и жетон
+  // «Ходишь раньше» стирался в тот же миг — раунд открывался со счётом 6 при
+  // пустой ленте, то есть компенсация начислялась молча.
+  S.history=[]; S.histSel=-1;
   // Компенсация за невыгодный первый ход: правило съедения «не меньше» на стороне
   // отвечающего, счёт второго за раунд выше на 6%, и в режимах до трёх побед это
   // копилось в перекос 44 на 55. Размер подобран прогонами.
@@ -690,7 +694,6 @@ function newRound(){
   render();
   banner('РАУНД '+S.round);
   toast('');
-  S.history=[]; S.histSel=-1;
   renderHistory();
   beginTurn(S.turn,1200);
 }

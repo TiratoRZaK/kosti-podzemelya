@@ -7,8 +7,6 @@ extends SceneTree
 func _init() -> void:
 	for n in [2, 3, 4]:
 		for mode in ["classic", "big", "draft", "race", "territory"]:
-			if n > 2 and mode != "classic" and mode != "big":
-				continue
 			run_set(mode, n, 600)
 	quit()
 
@@ -23,7 +21,10 @@ func run_set(mode: String, n: int, games: int) -> void:
 		var s := MatchState.new_match(mode, 1000 + g, "roster", "p", "", "Ты", [], roster)
 		var rng := MatchState.make_rng(500 + g)
 		var guard := 0
-		while not MatchState.is_match_over(s) and guard < 8000:
+		# крутим по state["over"], а не по is_match_over: для bo3 та возвращает true
+		# уже на открытии третьего раунда (round >= 3), и третий раунд не игрался —
+		# «Своя колода» и «Территория» мерились по двум раундам из трёх
+		while not bool(s.get("over", false)) and guard < 8000:
 			guard += 1
 			var seat := String(s["turn"])
 			var ev := {}

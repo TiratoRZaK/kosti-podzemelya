@@ -19,6 +19,15 @@ const SUITS := ["♠", "♥", "♦", "♣"]
 const HAND_SIZE := 6
 const MAX_TABLE := 6
 
+## Вчетвером рука меньше: 24 куба на 4×6 — это раздача всей колоды, и партия
+## превращалась в один проход по рукам. Прикупа не оставалось совсем, `refill_hands`
+## не делала ничего, а козырь брался из нижнего куба, который при раздаче с конца
+## всегда доставался последнему месту — козырь у него был в 100% раздач против 82%
+## у остальных. Отсюда перекос «кто остался дуракубом»: 22/23/33/19 вместо 25.
+## С рукой в пять кубов остаётся прикуп в четыре куба и разброс падает до 3 п.п.
+static func hand_size(state: Dictionary) -> int:
+	return 5 if state["order"].size() >= 4 else HAND_SIZE
+
 # --------------------------------------------------------------- создание
 
 ## roster — состав на троих и четверых; пустой означает игру на двоих.
@@ -40,7 +49,7 @@ static func new_game(seed_value: int, opponent: String, my_seat: String = "p",
 	state["talon"] = make_deck(state["rng"])
 	# козырь — масть нижнего куба колоды
 	state["trump"] = int(state["talon"][0]["suit"])
-	for i in HAND_SIZE:
+	for i in hand_size(state):
 		for seat in order:
 			players[seat]["hand"].append(state["talon"].pop_back())
 	state["attacker"] = first_attacker(state)
@@ -161,7 +170,7 @@ static func refill_hands(state: Dictionary) -> void:
 	for k in order.size():
 		var seat := String(order[(start + k) % order.size()])
 		var hand: Array = hand_of(state, seat)
-		while hand.size() < HAND_SIZE and not state["talon"].is_empty():
+		while hand.size() < hand_size(state) and not state["talon"].is_empty():
 			hand.append(state["talon"].pop_back())
 
 ## Партия кончается, когда колода пуста и с кубами остался один. Он и дуракуб.
@@ -284,7 +293,11 @@ static func forced_action(state: Dictionary, seat: String) -> String:
 			return ""
 		if state["table"].size() >= int(state["max_att"]):
 			return "bito"
-		if hand_of(state, other_seat(state, seat)).is_empty():
+		# смотреть надо на защитника, а не на соседа по кругу: `other_seat` берёт
+		# следующее сиденье как есть, а `defender_of` пропускает вышедших из игры.
+		# Втроём в 4,8% проверок, вчетвером в 10,9% сосед оказывался без кубов при
+		# живом защитнике — интерфейс сам жал «Бито», хотя подкидывать было можно
+		if hand_of(state, defender_of(state, String(state["attacker"]))).is_empty():
 			return "bito"
 		var vs := table_values(state)
 		for die in hand_of(state, seat):

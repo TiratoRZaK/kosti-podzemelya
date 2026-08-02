@@ -21,22 +21,29 @@ const MODES := {
 	"classic": {
 		"title": "КЛАССИКА", "sub": "3 жизни · поле 3×2 · 6 ходов в раунде",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "lives", "deck": "per_round", "deck_size": 10,
+		"komi": Rules.FIRST_MOVE_KOMI,
 	},
 	"big": {
 		"title": "БОЛЬШАЯ ДОСКА", "sub": "3 жизни · поле 3×3 · 10 ходов в раунде",
 		"cols": 3, "cells": 9, "moves": 10, "kind": "lives", "deck": "per_round", "deck_size": 14,
+		# 3×3 и десять ходов: сырой перекос по счёту 15 очков против 7 в классике,
+		# шестёрки классики тут заведомо мало
+		"komi": 16,
 	},
 	"draft": {
 		"title": "СВОЯ КОЛОДА", "sub": "18 кубов из 30 · у соперника та же колода · 3 раунда",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "bo3", "win_by": "score", "deck": "draft",
+		"komi": Rules.FIRST_MOVE_KOMI,
 	},
 	"race": {
 		"title": "ГОНКА ДО 500", "sub": "общая колода · счёт копится · кто первым наберёт 500",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "race", "target": 500, "deck": "shared",
+		"komi": Rules.FIRST_MOVE_KOMI,
 	},
 	"territory": {
 		"title": "ТЕРРИТОРИЯ", "sub": "3 раунда · за каждый ход считаются удержанные клетки",
 		"cols": 3, "cells": 6, "moves": 6, "kind": "bo3", "win_by": "count", "deck": "draft",
+		"komi": Rules.FIRST_MOVE_KOMI,
 	},
 }
 const MODE_ORDER := ["classic", "big", "draft", "race", "territory"]
@@ -66,6 +73,13 @@ const SEAT_NAMES := ["Игрок 1", "Игрок 2", "Игрок 3", "Игрок
 ## Имена ботов: у каждого своё. Раньше первый звался безлико «Враг», а остальные
 ## получали прозвища — выглядело как недоделка.
 const BOT_NAMES := ["Костолом", "Могильщик", "Скелетина", "Точильщик"]
+
+## Цена первого хода для режима и числа игроков.
+static func _komi_for(cfg: Dictionary, players: int) -> int:
+	var base := int(cfg.get("komi", Rules.FIRST_MOVE_KOMI))
+	if players >= 3:
+		return int(round(float(base) * 4.0 / 3.0))
+	return base
 
 static func seat_ids(count: int) -> Array:
 	return SEAT_IDS.slice(0, clampi(count, 2, SEAT_IDS.size()))
@@ -200,7 +214,7 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 	for seat in order:
 		players[seat] = {
 			"hand": [], "deck": [], "score": 0, "total": 0,
-			"moves": 0, "lives": LIVES_MAX, "wins": 0, "held": 0,
+			"moves": 0, "lives": LIVES_MAX, "wins": 0, "held": 0, "out": false,
 		}
 	var state := {
 		"mode": mode_key, "cfg": cfg, "seed": seed_value,
@@ -209,9 +223,11 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 		"seats": make_roster_seats(roster) if roster.size() >= 2 			else make_seats(opponent, my_seat, foe_name, my_name),
 		"turn": "p", "first_seat": "p",
 		"round": 0, "history": [], "log": [], "shown_to": "", "veil": "",
-		# цена первого хода: сколько получает тот, кто ходит в раунде первым.
-		# По умолчанию подобранная прогонами, но торг её переопределяет
-		"komi": Rules.FIRST_MOVE_KOMI, "bids": {},
+		# Цена первого хода: сколько получает тот, кто ходит в раунде первым.
+		# Размер зависит от режима — на большой доске отвечающий выигрывает втрое
+		# больше, чем в классике, и общей шестёрки там не хватало. С тремя и
+		# четырьмя игроками перекос тоже крупнее: раундов на каждого меньше.
+		"komi": _komi_for(cfg, order.size()), "bids": {},
 		"over": false, "outcome": {},
 	}
 	state["rng"] = make_rng(seed_value)
@@ -244,6 +260,11 @@ static func new_round(state: Dictionary) -> void:
 		state["players"][seat]["held"] = 0
 		if String(cfg["kind"]) != "race":
 			state["players"][seat]["score"] = 0
+		# В гонке счёт между раундами не обнуляется, поэтому запоминаем, с чего
+		# раунд начался: иначе «победителем раунда» объявлялся просто лидер по
+		# матчу — выиграл раунд 60:20, отстаёшь 300:400, а баннер говорит, что
+		# раунд взял соперник. Совпадало в 99% раундов.
+		state["players"][seat]["round_from"] = int(state["players"][seat]["score"])
 	if String(cfg["deck"]) == "per_round":
 		for seat in state["order"]:
 			state["players"][seat]["deck"] = make_deck(state["rng"], int(cfg["deck_size"]))
@@ -274,6 +295,11 @@ static func new_round(state: Dictionary) -> void:
 	# Компенсация за невыгодный ход по порядку: чем раньше ходишь, тем больше.
 	# Отвечать выгоднее, чем начинать, и с тремя игроками последний брал матчи
 	# заметно чаще — компенсация распределяется по всем, а не только первому.
+	# Ленту чистим ДО начисления компенсации, а не после: строчкой ниже жетон
+	# «Ходишь раньше» стирался тут же, и раунд открывался со счётом 6 при пустой
+	# ленте — ровно то молчаливое начисление, которое запрещено правилом карточки.
+	state["shown_to"] = ""
+	state["history"] = []
 	var komi_now := int(state.get("komi", Rules.FIRST_MOVE_KOMI))
 	if komi_now != 0:
 		var order: Array = state["order"]
@@ -293,8 +319,6 @@ static func new_round(state: Dictionary) -> void:
 				"parts": [{"t": "Ходишь раньше", "v": komi, "icon": "⏱"}], "mined": false,
 			})
 	state["first_seat"] = other_seat(state, String(state["first_seat"]))
-	state["shown_to"] = ""
-	state["history"] = []
 
 # ------------------------------------------------------------- поток хода
 
@@ -304,7 +328,23 @@ static func other_seat(state: Dictionary, seat: String) -> String:
 	return String(order[(i + 1) % order.size()])
 
 static func moves_left(state: Dictionary, seat: String) -> int:
+	# выбывший не ходит вовсе: через это его пропускают и очередь, и конец раунда
+	if is_out(state, seat):
+		return 0
 	return int(state["cfg"]["moves"]) - int(state["players"][seat]["moves"])
+
+## Игрок вне игры: жизни кончились. Он не ходит, не берёт раунды и не мешает
+## живым — раньше выбывший продолжал играть как ни в чём не бывало.
+static func is_out(state: Dictionary, seat: String) -> bool:
+	return bool(state["players"][seat].get("out", false))
+
+## Кто ещё в игре.
+static func alive_seats(state: Dictionary) -> Array:
+	var out := []
+	for seat in state["order"]:
+		if not is_out(state, seat):
+			out.append(String(seat))
+	return out
 
 static func all_moves_spent(state: Dictionary) -> bool:
 	for seat in state["order"]:
@@ -376,12 +416,15 @@ static func roll_duel(state: Dictionary) -> Dictionary:
 	var rounds := []
 	var winner := ""
 	var guard := 0
+	# Перебрасывают только те, у кого вышло поровну: остальные уже проиграли
+	# битву, и держать их на экране незачем.
+	var players: Array = state["order"].duplicate()
 	while winner == "" and guard < 20:
 		guard += 1
 		var rolls := {}
 		var best := 0
 		var leaders := []
-		for seat in state["order"]:
+		for seat in players:
 			var v := rng.randi_range(1, 6)
 			rolls[seat] = v
 			if v > best:
@@ -392,6 +435,8 @@ static func roll_duel(state: Dictionary) -> Dictionary:
 		rounds.append(rolls)
 		if leaders.size() == 1:
 			winner = String(leaders[0])
+		else:
+			players = leaders.duplicate()
 	if winner == "":
 		winner = String(state["order"][0])
 	return {"rounds": rounds, "winner": winner}
@@ -417,7 +462,7 @@ static func round_outcome(state: Dictionary) -> Dictionary:
 	var best := -(1 << 30)
 	var winners := []
 	var named := []
-	for seat in state["order"]:
+	for seat in alive_seats(state):
 		var v := round_value(state, String(seat))
 		named.append({"seat": String(seat), "v": v})
 		if v > best:
@@ -425,6 +470,21 @@ static func round_outcome(state: Dictionary) -> Dictionary:
 			winners = [seat]
 		elif v == best:
 			winners.append(seat)
+	# Ничья по удержанию — не редкость: клеток шесть, а игроков двое или четверо,
+	# и раунд не доставался никому в 12% случаев вдвоём и в 20% вчетвером. Заодно
+	# это делало бесполезной компенсацию за первый ход: она идёт в очки, а раунд
+	# «Территории» их не смотрел вовсе. Ничью решают очки.
+	if by_count and winners.size() > 1:
+		var best_score := -(1 << 30)
+		var tie := []
+		for seat in winners:
+			var v := int(state["players"][seat]["score"])
+			if v > best_score:
+				best_score = v
+				tie = [seat]
+			elif v == best_score:
+				tie.append(seat)
+		winners = tie
 	# С тремя игроками строка «11 : 34 : 32» ничего не говорила: непонятно, где
 	# чей счёт. Пишем с именами и по убыванию — сразу видно, кто взял раунд.
 	named.sort_custom(func(a, b): return int(a["v"]) > int(b["v"]))
@@ -440,10 +500,13 @@ static func round_outcome(state: Dictionary) -> Dictionary:
 ## Показатель, по которому раунд считается выигранным: в «Территории» это
 ## накопленное удержание клеток, в остальных режимах — очки за раунд.
 static func round_value(state: Dictionary, seat: String) -> int:
-	var by_count: bool = String(state["cfg"].get("win_by", "")) == "count"
-	if by_count:
-		return int(state["players"][seat].get("held", 0))
-	return int(state["players"][seat]["score"])
+	var pl: Dictionary = state["players"][seat]
+	if String(state["cfg"].get("win_by", "")) == "count":
+		return int(pl.get("held", 0))
+	# в гонке раунд решает набранное ЗА РАУНД, а не общий счёт матча
+	if String(state["cfg"]["kind"]) == "race":
+		return int(pl["score"]) - int(pl.get("round_from", 0))
+	return int(pl["score"])
 
 ## Закрыть раунд: списать жизнь или засчитать победу в раунде. Возвращает
 ## {"winner": seat|"", "detail": String, "match_over": bool}.
@@ -459,12 +522,17 @@ static func close_round(state: Dictionary) -> Dictionary:
 		else:
 			# Втроём и вчетвером жизнь теряют все, кроме взявшего раунд: раунд значит
 			# одно и то же при любом числе игроков — выиграл или потерял сердце.
-			# Жизни при этом кончаются у нескольких разом, поэтому матч решают очки
-			# за матч (`total`), иначе почти каждая партия вчетвером шла в ничью.
 			if String(out["winner"]) != "":
-				for seat in state["order"]:
+				for seat in alive_seats(state):
 					if String(seat) != String(out["winner"]):
 						state["players"][seat]["lives"] = int(state["players"][seat]["lives"]) - 1
+		# Жизни кончились — игрок выбывает и в следующих раундах не участвует.
+		# Раньше матч просто заканчивался, едва у КОГО-ТО жизни дошли до нуля:
+		# с двумя оставшимися сердцами можно было проиграть партию, а выбывший
+		# продолжал ходить как ни в чём не бывало.
+		for seat in state["order"]:
+			if int(state["players"][seat]["lives"]) <= 0:
+				state["players"][seat]["out"] = true
 	elif kind == "bo3":
 		if out["winner"] != "":
 			var w: String = String(out["winner"])
@@ -473,6 +541,9 @@ static func close_round(state: Dictionary) -> Dictionary:
 	# игроков часто равны, и без этого тай-брейка матч кончался ничьей
 	for seat in state["order"]:
 		state["players"][seat]["total"] = int(state["players"][seat]["total"]) + int(state["players"][seat]["score"])
+	# первым в следующем раунде ходит победитель, но если он выбыл — следующий живой
+	if is_out(state, String(state["first_seat"])) and not alive_seats(state).is_empty():
+		state["first_seat"] = String(alive_seats(state)[0])
 	# Следующий раунд начинает победитель этого. Ходить первым невыгодно: правило
 	# съедения «не меньше» отдаёт преимущество отвечающему, и раньше при простом
 	# чередовании в трёх раундах одно сиденье начинало дважды — режимы «до трёх
@@ -500,10 +571,8 @@ static func is_match_over(state: Dictionary) -> bool:
 	var cfg: Dictionary = state["cfg"]
 	var kind := String(cfg["kind"])
 	if kind == "lives":
-		for seat in state["order"]:
-			if int(state["players"][seat]["lives"]) <= 0:
-				return true
-		return false
+		# матч идёт, пока в живых больше одного
+		return alive_seats(state).size() <= 1
 	if kind == "bo3":
 		for seat in state["order"]:
 			if int(state["players"][seat]["wins"]) >= 2:
@@ -524,15 +593,21 @@ static func match_outcome(state: Dictionary) -> Dictionary:
 	# ничья — когда лучших несколько. С тремя игроками прежний код сравнивал только
 	# первые два сиденья и объявлял победителем не того.
 	if kind == "lives":
-		var by_lives := _best_by(state, func(pl): return int(pl["lives"]), "Жизни ")
-		if String(by_lives["winner"]) != "":
-			return by_lives
-		# жизни равны — решают набранные за матч очки
+		# победил тот, кто остался в живых один. Ничья бывает, когда последние
+		# сердца кончились у нескольких разом — тогда решают очки за матч
+		var alive := alive_seats(state)
+		if alive.size() == 1:
+			return {"winner": String(alive[0]),
+				"detail": "Жизней осталось: %d" % int(state["players"][alive[0]]["lives"])}
+		if alive.size() > 1:
+			var by_lives := _best_by(state, func(pl): return int(pl["lives"]), "Жизни ")
+			if String(by_lives["winner"]) != "":
+				return by_lives
 		var by_total := _best_by(state, func(pl): return int(pl["total"]), "")
 		return {
 			"winner": String(by_total["winner"]),
-			"detail": "%s · очки за матч %s" % [String(by_lives["detail"]),
-				String(by_total["detail"]).strip_edges()],
+			"detail": "Жизни кончились у всех · очки за матч %s"
+				% String(by_total["detail"]).strip_edges(),
 		}
 	if kind == "race":
 		return _best_by(state, func(pl): return int(pl["score"]), "Итог ")

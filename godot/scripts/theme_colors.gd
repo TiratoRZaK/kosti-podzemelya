@@ -64,6 +64,22 @@ const SEAT_FACES := [
 static func face_of(seat_index: int) -> Dictionary:
 	return SEAT_FACES[clampi(seat_index, 0, SEAT_FACES.size() - 1)]
 
+## Цвет ИМЕНИ игрока — не тот же, что цвет его куба.
+##
+## Красить подпись в `face["mid"]` казалось логичным, но грань куба выбрана под
+## объём, а не под чтение мелкого текста: кровавый `#93283a` даёт к панели 2.21:1,
+## мох и лазурь — 4.2–4.3:1 при норме 4.5. Имя соперника становилось нечитаемым
+## ровно тогда, когда на него смотрят. Здесь те же цвета, поднятые до 5.6–12.8:1.
+const SEAT_NAME_COLORS := [
+	Color("ead9b6"),   # кость
+	Color("d9707f"),   # кровь
+	Color("7fc48a"),   # мох
+	Color("7cc0e0"),   # лазурь
+]
+
+static func name_of(seat_index: int) -> Color:
+	return SEAT_NAME_COLORS[clampi(seat_index, 0, SEAT_NAME_COLORS.size() - 1)]
+
 ## Лицо куба: у игрока костяное, у соперника кровавое.
 static func face(seat_is_player: bool) -> Dictionary:
 	if seat_is_player:
