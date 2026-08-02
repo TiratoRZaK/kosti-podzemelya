@@ -134,15 +134,15 @@ func shield_case() -> void:
 	print("        колдун -> %s | шестёрка -> %s" % [str(t_warlock), str(t_six)])
 
 func spikes_visible_case() -> void:
-	# Скрыта осталась одна мина. Шипы открыли: пока они были скрыты, решение не
-	# менялось — незнакомый куб оказывался базовым в трёх случаях из четырёх, и
-	# правильный ответ всегда был «ешь», росла только дисперсия. Открытые шипы —
-	# это выбор «стоит ли эта клетка десяти очков».
-	var ok: bool = Rules.TYPES["mine"]["hidden"] and not Rules.TYPES["spikes"]["hidden"] \
-		and not Rules.TYPES["shield"]["hidden"] and not Rules.TYPES["jaw"]["hidden"]
+	# Скрыты обе ловушки — мина и шипы. Открытые шипы владелец забраковал: «ёжики
+	# соперников видны врагам», ловушка перестаёт быть ловушкой. Всё остальное
+	# (щит, челюсть) видно всегда, иначе не спланировать ход.
+	var ok: bool = Rules.TYPES["mine"]["hidden"] and Rules.TYPES["spikes"]["hidden"] \
+		and not Rules.TYPES["shield"]["hidden"] and not Rules.TYPES["jaw"]["hidden"] \
+		and not Rules.TYPES["warlock"]["hidden"] and not Rules.TYPES["friendly"]["hidden"]
 	if not ok:
 		fails += 1
-	print("%sскрытой осталась только мина, шипы видны" % ["  OK  " if ok else " FAIL "])
+	print("%sскрыты обе ловушки — мина и шипы, остальное видно" % ["  OK  " if ok else " FAIL "])
 
 ## Лесенка не должна перебивать то, что дороже её, и обязана считаться там, где
 ## одинаковых кубов нет вовсе.

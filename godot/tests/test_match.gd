@@ -25,6 +25,7 @@ func _init() -> void:
 	print("--- исход матча ---")
 	print("")
 	over_case()
+	party_round_case()
 
 	print("")
 	print("--- битва за первый ход ---")
@@ -87,8 +88,11 @@ func seats_case() -> void:
 		"экран у p | для e=%s, для p=%s" % [str(MatchState.needs_veil(hs, "e")),
 			str(MatchState.needs_veil(hs, "p"))])
 
-	var names_ok := MatchState.seat_name(hs, "p") == "Игрок 1" and MatchState.seat_name(pve, "e") == "Враг"
-	check(names_ok, "имена сидений зависят от состава")
+	# у бота прозвище из общего списка: безликого «Врага» больше нет ни на одном месте
+	var names_ok := MatchState.seat_name(hs, "p") == "Игрок 1" \
+		and MatchState.seat_name(pve, "e") == String(MatchState.BOT_NAMES[0])
+	check(names_ok, "имена сидений зависят от состава",
+		"бот=%s" % MatchState.seat_name(pve, "e"))
 
 func pass_case() -> void:
 	# соперник не может ходить: доска забита его же кубами, в руке единицы
@@ -145,6 +149,34 @@ func over_case() -> void:
 
 ## Полная партия: оба сиденья боты, крутим до конца матча. Проверяем, что игра
 ## доходит до исхода, счёт конечен и на каждом ходу сумма жетонов равна итогу.
+## Раунд за столом на четверых: сердце теряют все, кроме взявшего раунд, а строка
+## исхода называет игроков по именам. До этого списывалась одна жизнь у последнего
+## по счёту, а исход выглядел как «Счёт 11 : 34 : 32 : 74» — по нему нельзя было
+## понять, где чей счёт и кто выиграл.
+func party_round_case() -> void:
+	var roster := [
+		{"kind": "human", "local": true, "name": "Ты"},
+		{"kind": "bot", "local": false, "name": "Костолом"},
+		{"kind": "bot", "local": false, "name": "Могильщик"},
+		{"kind": "bot", "local": false, "name": "Скелетина"},
+	]
+	var s := MatchState.new_match("classic", 7, "roster", "p", "", "Ты", [], roster)
+	var want := {"p": 11, "e": 34, "c": 32, "d": 74}
+	for seat in want:
+		s["players"][seat]["score"] = int(want[seat])
+	var out := MatchState.close_round(s)
+	var lives := []
+	for seat in s["order"]:
+		lives.append(int(s["players"][seat]["lives"]))
+	var ok: bool = String(out["winner"]) == "d" and lives == [2, 2, 2, 3]
+	check(ok, "вчетвером сердце теряют все, кроме взявшего раунд",
+		"победитель=%s жизни=%s" % [String(out["winner"]), str(lives)])
+
+	var detail := String(out["detail"])
+	var named_ok: bool = detail.contains("Скелетина 74") and detail.contains("Ты 11") \
+		and detail.find("Скелетина") < detail.find("Ты")   # по убыванию: победитель первым
+	check(named_ok, "в исходе раунда счёт подписан именами и отсортирован", detail)
+
 func full_match_case(mode: String) -> void:
 	var s := MatchState.new_match(mode, 31337, "bot")
 	s["seats"]["p"] = {"kind": "bot", "local": false, "name": "Бот 1"}

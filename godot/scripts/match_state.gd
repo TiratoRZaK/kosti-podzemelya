@@ -63,7 +63,9 @@ const DURAK_MODE := {
 ## означает старую двойку, чтобы вызовы на двоих не переписывать.
 const SEAT_IDS := ["p", "e", "c", "d"]
 const SEAT_NAMES := ["Игрок 1", "Игрок 2", "Игрок 3", "Игрок 4"]
-const BOT_NAMES := ["Враг", "Костолом", "Могильщик", "Скелет"]
+## Имена ботов: у каждого своё. Раньше первый звался безлико «Враг», а остальные
+## получали прозвища — выглядело как недоделка.
+const BOT_NAMES := ["Костолом", "Могильщик", "Скелетина", "Точильщик"]
 
 static func seat_ids(count: int) -> Array:
 	return SEAT_IDS.slice(0, clampi(count, 2, SEAT_IDS.size()))
@@ -93,7 +95,7 @@ static func make_seats(opponent: String, my_seat: String = "p", foe_name: String
 		return {"p": mine, "e": theirs} if my_seat == "p" else {"p": theirs, "e": mine}
 	return {
 		"p": {"kind": "human", "local": true, "name": my_name if my_name != "" else "Ты"},
-		"e": {"kind": "bot", "local": false, "name": "Враг"},
+		"e": {"kind": "bot", "local": false, "name": BOT_NAMES[0]},
 	}
 
 static func seat_kind(state: Dictionary, seat: String) -> String:
@@ -414,20 +416,34 @@ static func round_outcome(state: Dictionary) -> Dictionary:
 	var by_count: bool = String(cfg.get("win_by", "")) == "count"
 	var best := -(1 << 30)
 	var winners := []
-	var parts := []
+	var named := []
 	for seat in state["order"]:
-		var v: int = int(state["players"][seat].get("held", 0)) if by_count 			else int(state["players"][seat]["score"])
-		parts.append(str(v))
+		var v := round_value(state, String(seat))
+		named.append({"seat": String(seat), "v": v})
 		if v > best:
 			best = v
 			winners = [seat]
 		elif v == best:
 			winners.append(seat)
-	var label: String = "Удержано клеток " if by_count else "Счёт "
+	# С тремя игроками строка «11 : 34 : 32» ничего не говорила: непонятно, где
+	# чей счёт. Пишем с именами и по убыванию — сразу видно, кто взял раунд.
+	named.sort_custom(func(a, b): return int(a["v"]) > int(b["v"]))
+	var label: String = "Удержано" if by_count else "Счёт"
+	var chunks := []
+	for e in named:
+		chunks.append("%s %d" % [seat_name(state, String(e["seat"])), int(e["v"])])
 	return {
 		"winner": String(winners[0]) if winners.size() == 1 else "",
-		"detail": label + " : ".join(parts),
+		"detail": "%s: %s" % [label, " · ".join(chunks)],
 	}
+
+## Показатель, по которому раунд считается выигранным: в «Территории» это
+## накопленное удержание клеток, в остальных режимах — очки за раунд.
+static func round_value(state: Dictionary, seat: String) -> int:
+	var by_count: bool = String(state["cfg"].get("win_by", "")) == "count"
+	if by_count:
+		return int(state["players"][seat].get("held", 0))
+	return int(state["players"][seat]["score"])
 
 ## Закрыть раунд: списать жизнь или засчитать победу в раунде. Возвращает
 ## {"winner": seat|"", "detail": String, "match_over": bool}.
@@ -441,21 +457,14 @@ static func close_round(state: Dictionary) -> Dictionary:
 				var loser := other_seat(state, String(out["winner"]))
 				state["players"][loser]["lives"] = int(state["players"][loser]["lives"]) - 1
 		else:
-			# Втроём и вчетвером жизнь теряет только последний по счёту. Списывать
-			# у всех, кроме победителя, нельзя: за три раунда жизни кончались у
-			# всех разом, и треть партий вчетвером заканчивалась ничьей.
-			var by_count: bool = String(cfg.get("win_by", "")) == "count"
-			var worst := 1 << 30
-			var losers := []
-			for seat in state["order"]:
-				var v: int = int(state["players"][seat].get("held", 0)) if by_count 					else int(state["players"][seat]["score"])
-				if v < worst:
-					worst = v
-					losers = [seat]
-				elif v == worst:
-					losers.append(seat)
-			for seat in losers:
-				state["players"][seat]["lives"] = int(state["players"][seat]["lives"]) - 1
+			# Втроём и вчетвером жизнь теряют все, кроме взявшего раунд: раунд значит
+			# одно и то же при любом числе игроков — выиграл или потерял сердце.
+			# Жизни при этом кончаются у нескольких разом, поэтому матч решают очки
+			# за матч (`total`), иначе почти каждая партия вчетвером шла в ничью.
+			if String(out["winner"]) != "":
+				for seat in state["order"]:
+					if String(seat) != String(out["winner"]):
+						state["players"][seat]["lives"] = int(state["players"][seat]["lives"]) - 1
 	elif kind == "bo3":
 		if out["winner"] != "":
 			var w: String = String(out["winner"])

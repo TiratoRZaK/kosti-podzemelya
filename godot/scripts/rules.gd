@@ -28,7 +28,7 @@ const SHIELD_CHARGES := 2
 const TYPES := {
 	"basic":    {"icon": "",   "name": "Базовый",      "hidden": false},
 	"shield":   {"icon": "🛡", "name": "Щит",           "hidden": false},
-	"spikes":   {"icon": "🦔", "name": "Шипы",          "hidden": false},
+	"spikes":   {"icon": "🦔", "name": "Шипы",          "hidden": true},
 	"mine":     {"icon": "💣", "name": "Мина",          "hidden": true},
 	"jaw":      {"icon": "🦷", "name": "Челюсть",       "hidden": false},
 	"friendly": {"icon": "🤝", "name": "Дружелюбный",   "hidden": false},
