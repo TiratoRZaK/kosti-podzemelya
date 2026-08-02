@@ -207,6 +207,9 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 		"seats": make_roster_seats(roster) if roster.size() >= 2 			else make_seats(opponent, my_seat, foe_name, my_name),
 		"turn": "p", "first_seat": "p",
 		"round": 0, "history": [], "log": [], "shown_to": "", "veil": "",
+		# цена первого хода: сколько получает тот, кто ходит в раунде первым.
+		# По умолчанию подобранная прогонами, но торг её переопределяет
+		"komi": Rules.FIRST_MOVE_KOMI, "bids": {},
 		"over": false, "outcome": {},
 	}
 	state["rng"] = make_rng(seed_value)
@@ -269,13 +272,14 @@ static func new_round(state: Dictionary) -> void:
 	# Компенсация за невыгодный ход по порядку: чем раньше ходишь, тем больше.
 	# Отвечать выгоднее, чем начинать, и с тремя игроками последний брал матчи
 	# заметно чаще — компенсация распределяется по всем, а не только первому.
-	if Rules.FIRST_MOVE_KOMI != 0:
+	var komi_now := int(state.get("komi", Rules.FIRST_MOVE_KOMI))
+	if komi_now != 0:
 		var order: Array = state["order"]
 		var n := order.size()
 		var start := order.find(String(state["turn"]))
 		for k in n:
 			var seat := String(order[(start + k) % n])
-			var komi := int(round(float(Rules.FIRST_MOVE_KOMI) * float(n - 1 - k) / float(n - 1)))
+			var komi := int(round(float(komi_now) * float(n - 1 - k) / float(n - 1)))
 			if komi == 0:
 				continue
 			state["players"][seat]["score"] = int(state["players"][seat]["score"]) + komi
@@ -358,6 +362,48 @@ static func advance(state: Dictionary) -> Dictionary:
 	return {"event": "turn", "seat": nxt, "veil": needs_veil(state, nxt)}
 
 # ----------------------------------------------------------------- исходы
+
+## Битва за первый ход: каждый бросает куб и накрывает стаканчиком, потом
+## стаканчики поднимаются разом. У кого больше — тот и начинает; при ничьей
+## переброс, и так пока не определится.
+##
+## Бросок идёт от сида матча, а не от случайности момента: по сети у всех
+## устройств выпадает одно и то же, и обмениваться результатом не нужно.
+static func roll_duel(state: Dictionary) -> Dictionary:
+	var rng: RandomNumberGenerator = state["rng"]
+	var rounds := []
+	var winner := ""
+	var guard := 0
+	while winner == "" and guard < 20:
+		guard += 1
+		var rolls := {}
+		var best := 0
+		var leaders := []
+		for seat in state["order"]:
+			var v := rng.randi_range(1, 6)
+			rolls[seat] = v
+			if v > best:
+				best = v
+				leaders = [seat]
+			elif v == best:
+				leaders.append(seat)
+		rounds.append(rolls)
+		if leaders.size() == 1:
+			winner = String(leaders[0])
+	if winner == "":
+		winner = String(state["order"][0])
+	return {"rounds": rounds, "winner": winner}
+
+## Поставить победителя битвы первым и переиграть первый раунд с новым порядком.
+static func apply_duel(state: Dictionary, winner: String) -> void:
+	state["first_seat"] = winner
+	state["round"] = 0
+	for seat in state["order"]:
+		state["players"][seat]["score"] = 0
+		state["players"][seat]["held"] = 0
+	state["history"] = []
+	state["log"] = []
+	new_round(state)
 
 ## Кто взял раунд. Возвращает {"winner": seat|"", "detail": String}.
 ## Работает на любое число сидений: берём лучший показатель, а ничья объявляется,

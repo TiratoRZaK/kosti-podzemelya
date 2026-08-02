@@ -117,6 +117,10 @@ var roster_layer: Control
 var roster_box: VBoxContainer
 var roster_kinds: Array = []   # типы мест со второго: bot | human | off
 var roster_for_run: Array = [] # состав, с которым запущена текущая партия
+var duel_layer: Control
+var duel_row: HBoxContainer
+var duel_note: Label
+var duel_count: Label
 
 func _ready() -> void:
 	_parse_args()
@@ -282,6 +286,10 @@ func _parse_args() -> void:
 			_shot_mode = "draft"
 		elif a == "--shot-roster":
 			_shot_mode = "roster"
+		elif a == "--shot-duel":
+			_shot_mode = "duel"
+		elif a == "--shot-duel-open":
+			_shot_mode = "duel_open"
 		elif a == "--shot-three":
 			_shot_mode = "three"
 		elif a == "--shot-durak3":
@@ -1519,6 +1527,124 @@ func _roster_for_match() -> Array:
 				"name": "Игрок %d" % (humans + 1)})
 	return out
 
+## Битва за первый ход.
+##
+## Все бросают по кубу и накрывают стаканчиком, потом идёт отсчёт и стаканчики
+## поднимаются разом: у кого больше — тот и начинает. При ничьей переброс.
+##
+## Броски приходят из логики (`MatchState.roll_duel`) и считаются от сида матча,
+## поэтому по сети у всех устройств выпадает одно и то же — обмениваться
+## результатами не нужно, а партия остаётся воспроизводимой.
+func _build_duel() -> Control:
+	var layer := _full_dim(0.97)
+	var v := VBoxContainer.new()
+	v.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	v.alignment = BoxContainer.ALIGNMENT_CENTER
+	v.add_theme_constant_override("separation", 16)
+	layer.add_child(v)
+	var t := _label("БИТВА ЗА ПЕРВЫЙ ХОД", 22, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(t)
+	duel_note = _label("Бросайте кубы", 13, Palette.MUTED)
+	duel_note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	v.add_child(duel_note)
+	duel_row = HBoxContainer.new()
+	duel_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	duel_row.add_theme_constant_override("separation", 18)
+	v.add_child(duel_row)
+	duel_count = _label("", 64, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
+	duel_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	duel_count.custom_minimum_size.y = 80
+	v.add_child(duel_count)
+	return layer
+
+func _start_duel(after: Callable) -> void:
+	if duel_layer == null:
+		duel_layer = _build_duel()
+		add_child(duel_layer)
+	duel_layer.visible = true
+	duel_count.text = ""
+	var res := MatchState.roll_duel(state)
+	await _play_duel(res)
+	MatchState.apply_duel(state, String(res["winner"]))
+	duel_layer.visible = false
+	_refresh()
+	if after.is_valid():
+		after.call()
+
+## Показ битвы: раунд за раундом, пока не определится победитель.
+func _play_duel(res: Dictionary) -> void:
+	var rounds: Array = res["rounds"]
+	for i in rounds.size():
+		var rolls: Dictionary = rounds[i]
+		duel_note.text = "Бросайте кубы" if i == 0 else "НИЧЬЯ — ПЕРЕБРОС!"
+		if i > 0:
+			buzz(80)
+			_shake(6.0, 0.25)
+		await _duel_round(rolls, i == rounds.size() - 1, String(res["winner"]))
+
+func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
+	for c in duel_row.get_children():
+		c.queue_free()
+	await get_tree().process_frame
+	var cups := []
+	var dice := []
+	for seat in state["order"]:
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 6)
+		duel_row.add_child(col)
+		var nm := _label(_who_name(state, String(seat)), 11, Palette.MUTED)
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		col.add_child(nm)
+		# куб и стаканчик лежат в одной ячейке: стакан просто выше по слою
+		var slot := Control.new()
+		slot.custom_minimum_size = Vector2(84, 96)
+		col.add_child(slot)
+		var d := DieView.new()
+		# куб должен целиком уместиться под стаканом, иначе значение видно заранее
+		d.position = Vector2(18, 30)
+		d.size = Vector2(48, 48)
+		d.custom_minimum_size = Vector2(48, 48)
+		d.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.add_child(d)
+		d.setup(int(rolls[seat]), "basic", String(seat) == "p", false, 0,
+			int(state["order"].find(String(seat))))
+		dice.append(d)
+		var cup := CupView.new()
+		cup.size = Vector2(84, 96)
+		cup.custom_minimum_size = Vector2(84, 96)
+		slot.add_child(cup)
+		cups.append(cup)
+	# кубы под стаканчиками: сперва бросок, потом накрыли
+	buzz(30)
+	await get_tree().create_timer(0.45).timeout
+
+	# отсчёт: три, два, один
+	for n in [3, 2, 1]:
+		duel_count.text = str(n)
+		duel_count.pivot_offset = duel_count.size * 0.5
+		duel_count.scale = Vector2(1.5, 1.5)
+		var tw := create_tween()
+		tw.tween_property(duel_count, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK)
+		buzz(25)
+		await get_tree().create_timer(0.55).timeout
+	duel_count.text = ""
+
+	# стаканчики поднимаются разом
+	buzz(60)
+	for cup in cups:
+		var tw2 := create_tween().set_parallel(true)
+		tw2.tween_property(cup, "position:y", -70.0, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		tw2.tween_property(cup, "modulate:a", 0.0, 0.32)
+	await get_tree().create_timer(0.4).timeout
+	for d in dice:
+		d.play_place()
+	if last:
+		duel_note.text = "%s ходит первым!" % _who_name(state, winner)
+		_flash_screen(Color(1, 0.82, 0.35, 0.25), 0.4)
+		buzz(120)
+	await get_tree().create_timer(0.9 if last else 0.5).timeout
+
 ## Экран драфта: из тридцати предложенных кубов игрок набирает восемнадцать.
 ##
 ## Без него режим «Своя колода» обманывал названием: колода набиралась случайно,
@@ -2485,6 +2611,13 @@ func _launch_match(key: String, seed_value: int, deck: Array = [], roster: Array
 	toast("")
 	_refresh()
 	_relayout_soon()
+	# Торг за первый ход идёт до начала партии — у сетевых партий пока цена по
+	# умолчанию: обмен ставками по сети сделан не будет без отдельного протокола.
+	_start_duel(func():
+		banner("РАУНД %d" % int(state["round"]))
+		_begin_turn(String(state["turn"]))
+	)
+	return
 	banner("РАУНД %d" % int(state["round"]))
 	_begin_turn(String(state["turn"]))
 
@@ -3676,6 +3809,15 @@ func _shot_scenario() -> void:
 			# второй шаг меню: выбор режима после выбора вида игры
 			_show_modes()
 			await get_tree().process_frame
+		"duel":
+			opponent = "bot"
+			_start_mode("classic")
+			await get_tree().create_timer(0.5).timeout
+		"duel_open":
+			# момент, когда стаканчики уже поднялись
+			opponent = "bot"
+			_start_mode("classic")
+			await get_tree().create_timer(2.7).timeout
 		"roster":
 			roster_kinds = ["bot", "bot", "off"]
 			_show_roster()

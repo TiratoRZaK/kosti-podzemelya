@@ -27,6 +27,11 @@ func _init() -> void:
 	over_case()
 
 	print("")
+	print("--- битва за первый ход ---")
+	print("")
+	duel_case()
+
+	print("")
 	print("--- матч от начала до конца ---")
 	print("")
 	full_match_case("classic")
@@ -190,3 +195,42 @@ func full_match_case(mode: String) -> void:
 			int(s["round"]), String(final["detail"]),
 			(MatchState.seat_name(s, String(final["winner"])) if final["winner"] != "" else "ничья"),
 			str(contract_ok), " | УПЁРЛСЯ В ЛИМИТ" if guard >= 4000 else ""])
+
+## Битва за первый ход: броски берутся от сида, значит по сети у всех выпадает
+## одно и то же. При ничьей обязателен переброс, иначе первым ходил бы кто попало.
+func duel_case() -> void:
+	var a := MatchState.new_match("classic", 555777, "bot")
+	var b := MatchState.new_match("classic", 555777, "bot")
+	var ra := MatchState.roll_duel(a)
+	var rb := MatchState.roll_duel(b)
+	check(String(ra["winner"]) == String(rb["winner"]) and ra["rounds"].size() == rb["rounds"].size(),
+		"тот же сид — та же битва: победитель и число бросков совпали",
+		"победитель=%s бросков=%d" % [String(ra["winner"]), ra["rounds"].size()])
+
+	# в каждом раунде битвы, кроме последнего, обязана быть ничья
+	var ties_ok := true
+	var rounds: Array = ra["rounds"]
+	for i in rounds.size():
+		var rolls: Dictionary = rounds[i]
+		var best := 0
+		var leaders := 0
+		for seat in a["order"]:
+			var v := int(rolls[seat])
+			if v > best:
+				best = v
+				leaders = 1
+			elif v == best:
+				leaders += 1
+		var is_last: bool = i == rounds.size() - 1
+		if is_last and leaders != 1:
+			ties_ok = false
+		if not is_last and leaders < 2:
+			ties_ok = false
+	check(ties_ok, "переброс случается только при ничьей, последний бросок решает",
+		"раундов битвы=%d" % rounds.size())
+
+	# победитель битвы действительно ходит первым
+	MatchState.apply_duel(a, String(ra["winner"]))
+	check(String(a["turn"]) == String(ra["winner"]) and int(a["round"]) == 1,
+		"победитель битвы начинает первый раунд",
+		"ход у %s, раунд %d" % [String(a["turn"]), int(a["round"])])
