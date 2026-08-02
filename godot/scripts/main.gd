@@ -124,6 +124,9 @@ func _ready() -> void:
 	_build_ui()
 	_apply_safe_area()
 	get_viewport().size_changed.connect(_apply_safe_area)
+	# после первой раскладки пересчитываем доску: до неё узлы не знают своих
+	# размеров, и клетка вышла бы по запасному значению
+	_relayout_soon()
 	_show_menu()
 	_report_boot()
 	# имя спрашиваем один раз за установку; снимки экранов этим не тормозим
@@ -157,6 +160,12 @@ func _reset_shift() -> void:
 	for box in [battle_root, durak_root]:
 		if box != null:
 			box.position = Vector2.ZERO
+
+## Перерисовать через два кадра, когда контейнеры уже знают свои размеры.
+func _relayout_soon() -> void:
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_refresh_screen()
 
 ## Отступы по безопасной зоне устройства. У телефона снизу жестовая полоса или
 ## кнопки навигации, сверху вырез — без этого нижняя часть экрана (рука и кнопки)
@@ -337,8 +346,9 @@ func _build_ui() -> void:
 	add_child(pad)
 	battle_root = pad
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 10)
+	root.add_theme_constant_override("separation", 8)
 	pad.add_child(root)
+	battle_col = root
 
 	root.add_child(_title_block())
 	root.add_child(_foe_zone())
@@ -355,6 +365,7 @@ func _build_ui() -> void:
 	var board_wrap := CenterContainer.new()
 	board_wrap.add_child(board_grid)
 	root.add_child(board_wrap)
+	board_holder = board_wrap
 	sel_info = _label("", 12, Palette.MUTED)
 	sel_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sel_info.custom_minimum_size.y = 32
@@ -378,7 +389,6 @@ func _build_ui() -> void:
 	card_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card_scroll = ScrollContainer.new()
 	card_scroll.custom_minimum_size.y = 116
-	card_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	card_scroll.add_child(card_box)
@@ -521,8 +531,9 @@ func _build_durak() -> Control:
 	durak_root = pad
 	layer.add_child(pad)
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 10)
+	root.add_theme_constant_override("separation", 8)
 	pad.add_child(root)
+	durak_col = root
 
 	var t := _label("КОСТИ ПОДЗЕМЕЛЬЯ", 25, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -576,6 +587,7 @@ func _build_durak() -> Control:
 	d_table.add_theme_constant_override("h_separation", CELL_GAP)
 	d_table.add_theme_constant_override("v_separation", CELL_GAP)
 	root.add_child(d_table)
+	durak_table_holder = d_table
 
 	d_hint = _label("", 12, Palette.MUTED)
 	d_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -749,11 +761,25 @@ func _d_refresh() -> void:
 func _d_rebuild_table(table: Array, trump: int) -> void:
 	for c in d_table.get_children():
 		c.queue_free()
-	# место в 1.12 высоты, поэтому по высоте считаем с этим коэффициентом; 470 —
-	# всё остальное на экране Дуракуба, включая руку в два ряда
+	# Место высотой в 1.12 ширины, поэтому по высоте делим на коэффициент. Остаток
+	# высоты спрашиваем у самих панелей, как на боевом экране: константа со снимка
+	# врала на телефонах с другой высотой строк.
 	var by_width: float = (390.0 - _safe.x - _safe.z - CELL_GAP * 2) / 3.0
-	var by_height: float = (get_viewport_rect().size.y - _safe.y - _safe.w - 442.0 - CELL_GAP) / 2.0 / 1.12
-	var cell_w: float = maxf(minf(by_width, by_height), 60.0)
+	var by_height := by_width
+	if durak_col != null and durak_table_holder != null:
+		var sep: float = float(durak_col.get_theme_constant("separation"))
+		var need := 0.0
+		var n := 0
+		for c in durak_col.get_children():
+			if c is Control and c.visible:
+				n += 1
+				if c != durak_table_holder:
+					need += (c as Control).get_combined_minimum_size().y
+		if n > 1:
+			need += sep * float(n - 1)
+		var avail: float = get_viewport_rect().size.y - _safe.y - _safe.w - need
+		by_height = (avail - CELL_GAP) / 2.0 / 1.12
+	var cell_w: float = maxf(minf(by_width, by_height), 52.0)
 	# 0.58 — чтобы защитный куб перекрывал атакующий только углом: при 0.66 он
 	# налезал на само значение, и было не разобрать, чем атаковали
 	var die_px := int(cell_w * 0.58)
@@ -1868,6 +1894,7 @@ func _next_round() -> void:
 		c.queue_free()
 	toast("")
 	_refresh()
+	_relayout_soon()
 	banner("РАУНД %d" % int(state["round"]))
 	_begin_turn(String(state["turn"]))
 
@@ -2058,6 +2085,7 @@ func _launch_match(key: String, seed_value: int, deck: Array = []) -> void:
 		c.queue_free()
 	toast("")
 	_refresh()
+	_relayout_soon()
 	banner("РАУНД %d" % int(state["round"]))
 	_begin_turn(String(state["turn"]))
 
@@ -2354,19 +2382,30 @@ func _rebuild_board(me: String) -> void:
 			d.setup(int(cell["v"]), String(cell["type"]), String(cell["owner"]) == "p",
 				not hidden or seen, int(cell["shield"]))
 
-## Размер клетки: по ширине экрана, но не выше того, что осталось от высоты.
-## На поле 3×3 и на невысоких экранах доска иначе не влезает вместе с рукой.
-## 582 — всё, кроме доски: титул, зона соперника, тост, шапка хода, подсказка,
-## лента, карточка, своя зона с рукой и отступы между ними. Мерено по снимку на
-## 390×844: на поле 3×2 клетку это не трогает, а на 3×3 она мельчает, и рука
-## перестаёт уезжать под край экрана.
+## Размер клетки: по ширине экрана и по тому, что реально осталось от высоты.
+##
+## Раньше «всё кроме доски» было константой, снятой со снимка (582 px), и на
+## телефоне с другой высотой строк кнопки «Правила» и «Меню» вылезали за край.
+## Теперь высота остального спрашивается у самих узлов — сколько им нужно, — и
+## доска забирает ровно остаток. Что бы ни поменялось в панелях, экран сойдётся.
 func _cell_size(cols: int, cells: int) -> float:
 	var rows: int = ceili(float(cells) / float(cols))
 	var by_width: float = (390.0 - _safe.x - _safe.z - CELL_GAP * (cols - 1)) / float(cols)
-	# из высоты вычитаем и безопасную зону: под системной панелью рисовать нельзя
-	var budget: float = get_viewport_rect().size.y - _safe.y - _safe.w - 554.0
-	var by_height: float = (budget - CELL_GAP * (rows - 1)) / float(rows)
-	return maxf(minf(by_width, by_height), 52.0)
+	var by_height := by_width
+	if battle_col != null and board_holder != null:
+		var sep: float = float(battle_col.get_theme_constant("separation"))
+		var need := 0.0
+		var n := 0
+		for c in battle_col.get_children():
+			if c is Control and c.visible:
+				n += 1
+				if c != board_holder:
+					need += (c as Control).get_combined_minimum_size().y
+		if n > 1:
+			need += sep * float(n - 1)
+		var avail: float = get_viewport_rect().size.y - _safe.y - _safe.w - need
+		by_height = (avail - CELL_GAP * (rows - 1)) / float(rows)
+	return maxf(minf(by_width, by_height), 46.0)
 
 func _rebuild_hand(me: String) -> void:
 	for c in hand_row.get_children():
@@ -2834,6 +2873,10 @@ func _cell_center(idx: int) -> Vector2:
 var _shake_tween: Tween
 var _shown_score := {}      # какое число счёта сейчас на экране, для прокрутки
 var veil_wings: Array = []  # створки ширмы
+var battle_col: VBoxContainer   # колонка боевого экрана: по ней считаем свободное место
+var board_holder: Control       # обёртка доски
+var durak_col: VBoxContainer    # колонка экрана Дуракуба
+var durak_table_holder: Control # стол Дуракуба
 
 ## Тряска сдвигает весь холст, а не контейнер экрана.
 ##
