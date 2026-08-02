@@ -174,11 +174,12 @@ func ward_case() -> void:
 func bot_case() -> void:
 	var rng := MatchState.make_rng(7)
 	var s := party(2)
-	s["players"]["p"]["total"] = 50      # хватает на buy (40), но это больше половины
+	# хватает на покупку, но она съела бы больше половины казны
+	s["players"]["p"]["total"] = Events.cost_of("buy") * 2 - 2
 	var poor := Events.bot_choice(s, "p", {"kind": "buy", "offer": [
 		{"value": 6, "type": "basic"}]}, rng)
 	check(poor.is_empty(), "бот не тратит больше половины накопленного",
-		"очки=50, цена=%d" % Events.cost_of("buy"))
+		"очки=%d, цена=%d" % [int(s["players"]["p"]["total"]), Events.cost_of("buy")])
 
 	s["players"]["p"]["total"] = 200
 	var rich := Events.bot_choice(s, "p", {"kind": "buy", "offer": [

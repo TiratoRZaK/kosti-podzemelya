@@ -180,7 +180,14 @@ func _report_boot() -> void:
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_WM_GO_BACK_REQUEST:
 		return
-	if rules_layer != null and rules_layer.visible:
+	if event_layer != null and event_layer.visible:
+		# предложение — модальный экран поверх меню: без этой ветки «Назад»
+		# открывала меню ПОД ним, и оно было недоступно
+		event_done = true
+		event_layer.visible = false
+	elif veil_layer != null and veil_layer.visible:
+		pass                      # из-под ширмы уходить некуда: там чужой ход
+	elif rules_layer != null and rules_layer.visible:
 		rules_layer.visible = false
 	elif over_layer != null and over_layer.visible:
 		over_layer.visible = false
@@ -686,8 +693,11 @@ func _foe_row(seat: String, compact: bool) -> Control:
 	right.alignment = BoxContainer.ALIGNMENT_END
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(right)
-	var sc := _label(_score_text(seat, kind, state["cfg"]), 20 if not compact else 16,
-		Palette.GOLD_LIGHT, Palette.FONT_UI)
+	if compact:
+		right.add_child(_label("%d в руке" % state["players"][seat]["hand"].size(), 11, Palette.MUTED))
+	var sc := _label(_score_text(seat, kind, state["cfg"]), 20 if not compact else 18,
+		Palette.NEG if int(state["players"][seat]["score"]) < 0 else Palette.GOLD_LIGHT,
+		Palette.FONT_UI)
 	right.add_child(sc)
 	# рубашки руки показываем, только когда соперник один: втроём места нет
 	if not compact:
@@ -704,7 +714,7 @@ func _foe_row(seat: String, compact: bool) -> Control:
 		row2.add_child(_grow())
 		row2.add_child(_label("Колода: %d" % state["players"][seat]["deck"].size(), 11, Palette.MUTED))
 	else:
-		right.add_child(_label("  %d в руке" % state["players"][seat]["hand"].size(), 11, Palette.MUTED))
+		right.add_theme_constant_override("separation", 10)
 	# чей сейчас ход — видно по маркеру слева; имя цвет не меняет, он значит
 	# принадлежность кубов, а не очередь
 	return v
@@ -832,7 +842,13 @@ func _build_durak() -> Control:
 	d_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	d_hint.custom_minimum_size.y = 34
 	root.add_child(d_hint)
-	root.add_child(_grow())
+	# распорка по ВЕРТИКАЛИ: `_grow()` растягивает только по горизонтали, и в
+	# столбце он не делал ничего — стол Дуракуба висел в воздухе, а внизу
+	# простаивало от 72 до 125 px, при том что `_fit_battle` ещё и сжимал колонку
+	var d_spacer := Control.new()
+	d_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	d_spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(d_spacer)
 
 	var my_panel := _panel()
 	root.add_child(my_panel)
@@ -985,7 +1001,8 @@ func _d_refresh() -> void:
 	d_talon.text = "Колода: %d" % d_state["talon"].size()
 	d_discard.text = "Бито: %d" % int(d_state["discard"])
 	d_trump_mark.setup(trump, Palette.GOLD_LIGHT)
-	d_info.text = "· СТОЛ %d/%d" % [table.size(), int(d_state["max_att"])]
+	# «СТОЛ 2/4» никто не расшифровывал: читалось как номер стола
+	d_info.text = "· ПОДКИНУТО %d ИЗ %d" % [table.size(), int(d_state["max_att"])]
 
 	var i_act := acting == me
 	if acting == "":
@@ -1247,9 +1264,14 @@ func _start_durak(seed_value: int = -1) -> void:
 
 ## Единственная точка передачи роли: бот, безальтернативное действие, ширма или
 ## ожидание ввода. Ровно как beginTurn в боевых режимах.
+## Токен потока и в Дуракубе. Раньше его цепочка сверялась только с «партия ещё
+## идёт», и уход в меню во время раздумья бота не останавливал ничего: бот
+## доигрывал под меню, ширма всплывала поверх, а «ТЫ ДУРАКУБ!» показывалось над
+## главным экраном.
 func _durak_next(delay: float = 0.7) -> void:
 	if d_state.is_empty():
 		return
+	var tok := flow_token
 	if bool(d_state["over"]):
 		await _d_finish()
 		return
@@ -1259,10 +1281,17 @@ func _durak_next(delay: float = 0.7) -> void:
 		_d_refresh()
 		return
 	if MatchState.seat_kind(d_state, o) == "bot":
+		# По сети бота ведёт только хозяин: иначе ход за него сделает каждое
+		# устройство. В боевых режимах это правило есть давно, здесь его не было —
+		# спасало лишь то, что дубль отбрасывается по фазе.
+		if opponent == "remote" and lan != null and not lan.is_host:
+			busy = true
+			_d_refresh()
+			return
 		busy = true
 		_d_refresh()
 		await get_tree().create_timer(delay).timeout
-		if d_state.is_empty() or not in_durak:
+		if d_state.is_empty() or not in_durak or tok != flow_token:
 			return
 		await _d_bot()
 		return
@@ -1283,7 +1312,7 @@ func _durak_next(delay: float = 0.7) -> void:
 			else "%s: подкидывать нечем — бито" % who
 		d_toast(why, o != _d_viewer())
 		await get_tree().create_timer(delay).timeout
-		if d_state.is_empty() or not in_durak:
+		if d_state.is_empty() or not in_durak or tok != flow_token:
 			return
 		if forced == "take":
 			await _d_take(o)
@@ -1575,7 +1604,7 @@ func _kind_button(title: String, sub: String, on_press: Callable, disabled: bool
 	box.add_theme_stylebox_override("panel", _mode_box())
 	box.custom_minimum_size.x = 300
 	if disabled:
-		box.modulate = Color(1, 1, 1, 0.45)
+		box.modulate = Color(1, 1, 1, 0.7)
 		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	else:
 		box.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -1717,6 +1746,7 @@ func _roster_refresh() -> void:
 func _roster_row(idx: int, title: String, kind: String) -> Control:
 	var box := PanelContainer.new()
 	box.add_theme_stylebox_override("panel", _mode_box())
+	box.custom_minimum_size.y = _touch(44.0)
 	box.custom_minimum_size.x = 290
 	var row := HBoxContainer.new()
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -3081,6 +3111,9 @@ func _event_buy(seat: String, ev: Dictionary) -> void:
 		var d := DieView.new()
 		d.custom_minimum_size = Vector2(62, 62)
 		d.clickable = true
+		# рамка, как у выбранного куба в драфте: без неё голый куб не читается как
+		# кнопка, а тап по нему сразу списывает очки
+		_mark_pickable(d)
 		d.setup(int(die["value"]), String(die["type"]), true, true, 0,
 			int(state["order"].find(seat)))
 		d.pressed.connect(func(_x):
@@ -3104,6 +3137,7 @@ func _event_reroll(seat: String, ev: Dictionary, step: String, ctx: Dictionary) 
 			var d := DieView.new()
 			d.custom_minimum_size = Vector2(56, 56)
 			d.clickable = true
+			_mark_pickable(d)
 			d.setup(int(hand[i]["value"]), String(hand[i]["type"]), true, true, 0,
 				int(state["order"].find(seat)))
 			d.pressed.connect(func(_x): _event_draw(seat, ev, "value", {"idx": i}))
@@ -3159,6 +3193,7 @@ func _event_swap(seat: String, ev: Dictionary, step: String, ctx: Dictionary) ->
 			var d := DieView.new()
 			d.custom_minimum_size = Vector2(56, 56)
 			d.clickable = true
+			_mark_pickable(d)
 			d.setup(int(hand[i]["value"]), String(hand[i]["type"]), true, true, 0,
 				int(state["order"].find(seat)))
 			d.pressed.connect(func(_x): _event_draw(seat, ev, "who", {"mine": i}))
@@ -3206,6 +3241,24 @@ func _event_done_text(kind: String) -> String:
 		"swap": return "обменялся кубом"
 	return "воспользовался ивентом"
 
+## Обвести куб, по которому можно нажать: тап по нему тратит очки, и он обязан
+## отличаться от куба, который просто показывают.
+func _mark_pickable(d: Control) -> void:
+	var frame := Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0, 0, 0, 0)
+	sb.set_corner_radius_all(12)
+	sb.border_color = Palette.GOLD
+	sb.set_border_width_all(2)
+	frame.add_theme_stylebox_override("panel", sb)
+	frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	frame.offset_left = -3
+	frame.offset_top = -3
+	frame.offset_right = 3
+	frame.offset_bottom = 3
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	d.add_child(frame)
+
 func _event_hint(text: String) -> Control:
 	var l := _label(text, 13, Palette.TEXT)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -3228,6 +3281,8 @@ func _event_hand_row(seat: String, hand: Array, on_pick: Callable) -> Control:
 		var d := DieView.new()
 		d.custom_minimum_size = Vector2(56, 56)
 		d.clickable = on_pick.is_valid()
+		if on_pick.is_valid():
+			_mark_pickable(d)
 		# в чужой руке видно всё, включая ловушки: за это и платят
 		d.setup(int(die["value"]), String(die["type"]), false, true, 0,
 			int(state["order"].find(seat)))
