@@ -1781,7 +1781,7 @@ const ABILITY_ICONS := {
 }
 const ABILITY_TEXT := {
 	"shield": "Два хода соперника его нельзя съесть — даже колдуном и челюстью.",
-	"spikes": "Скрыт от соперника. Съевший теряет 10 очков, но куб всё равно съеден.",
+	"spikes": "Виден всем. Съевший теряет 10 очков, но куб всё равно съеден: это цена, а не защита.",
 	"mine": "Скрыта. Уничтожает себя и атакующего, а ход сгорает целиком: ни ренты, ни комбо за него не начислят.",
 	"jaw": "При выставлении съедает вражеский куб справа — любого значения, хоть шестёрку. В правом столбце бессильна.",
 	"friendly": "Прибавляет к себе сумму значений соседей, и своих и чужих, максимум 12. Дороже шести его уже не съесть обычным кубом.",
@@ -2467,6 +2467,7 @@ func _start_mode(key: String, deck: Array = []) -> void:
 ## смотрел на «Ждём хоста…» поверх уже идущей новой партии.
 func _launch_match(key: String, seed_value: int, deck: Array = [], roster: Array = []) -> void:
 	_new_flow()
+	_last_rent.clear()
 	_reset_shift()
 	menu_layer.visible = false
 	over_layer.visible = false
@@ -3157,6 +3158,27 @@ func _play_card(res: Dictionary) -> void:
 	chips.add_theme_constant_override("v_separation", 6)
 	v.add_child(chips)
 
+	# Главное правило игры — рента идёт каждый ход, поэтому ранний куб дороже
+	# позднего. В карточке этого не было видно: игрок каждый ход читал одно и то
+	# же «Кубы на поле» и не понимал, что ход ему купил. Считаем прирост ренты и
+	# сколько он ещё принесёт до конца раунда.
+	var rent := 0
+	for p in res["parts"]:
+		if String(p["t"]) == "Кубы на поле":
+			rent = int(p["v"])
+	var prev := int(_last_rent.get(seat, 0))
+	_last_rent[seat] = rent
+	var grew := rent - prev
+	var left: int = maxi(int(state["cfg"]["moves"]) - int(state["players"][seat]["moves"]), 0)
+	if grew != 0 and left > 0:
+		var tip := _label("рента %s%d · впереди %d %s — это ещё %s%d" % [
+			"+" if grew > 0 else "", grew, left,
+			_plural(left, "ход", "хода", "ходов"),
+			"+" if grew > 0 else "", grew * left], 11,
+			Palette.GOLD_LIGHT if grew > 0 else Palette.NEG)
+		tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		v.add_child(tip)
+
 	var parts: Array = res["parts"]
 	for p in parts:
 		var chip := _chip(p)
@@ -3284,6 +3306,7 @@ func _cell_center(idx: int) -> Vector2:
 ## положение — и после серии экран так и остался бы съехавшим за край.
 var _shake_tween: Tween
 var _shown_score := {}      # какое число счёта сейчас на экране, для прокрутки
+var _last_rent := {}        # рента прошлого хода: по ней считается прирост
 var veil_wings: Array = []  # створки ширмы
 var battle_col: VBoxContainer   # колонка боевого экрана: по ней считаем свободное место
 var board_holder: Control       # обёртка доски

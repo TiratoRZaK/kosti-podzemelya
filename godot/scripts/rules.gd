@@ -21,14 +21,14 @@ const SPIKES_PENALTY := 10
 ## отдаёт преимущество отвечающему: у второго счёт за раунд выше на 6%, и в
 ## режимах до трёх побед это копилось в перекос 44 на 55. Размер подобран
 ## прогонами — см. историю правок.
-const FIRST_MOVE_KOMI := 8
+const FIRST_MOVE_KOMI := 6
 const SHIELD_CHARGES := 2
 
 ## Типы кубов. hidden — противник не видит значок, пока куб не сработает.
 const TYPES := {
 	"basic":    {"icon": "",   "name": "Базовый",      "hidden": false},
 	"shield":   {"icon": "🛡", "name": "Щит",           "hidden": false},
-	"spikes":   {"icon": "🦔", "name": "Шипы",          "hidden": true},
+	"spikes":   {"icon": "🦔", "name": "Шипы",          "hidden": false},
 	"mine":     {"icon": "💣", "name": "Мина",          "hidden": true},
 	"jaw":      {"icon": "🦷", "name": "Челюсть",       "hidden": false},
 	"friendly": {"icon": "🤝", "name": "Дружелюбный",   "hidden": false},

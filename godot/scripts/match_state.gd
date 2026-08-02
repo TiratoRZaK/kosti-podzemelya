@@ -423,7 +423,19 @@ static func close_round(state: Dictionary) -> Dictionary:
 	# чередовании в трёх раундах одно сиденье начинало дважды — режимы «до трёх
 	# побед» ложились в сторону второго игрока (драфт 43% против 57%). Заодно это
 	# работает как догоняющая механика. При ничьей порядок просто чередуется.
-	if String(out["winner"]) != "":
+	if kind == "race":
+		# В гонке счёт копится между раундами, поэтому «первым ходит победитель»
+		# отдавало компенсацию тому, кто и так впереди, — снежный ком. Первым идёт
+		# отстающий: это и догоняющая механика, и лечение перекоса.
+		var worst := 1 << 30
+		var behind := String(state["order"][0])
+		for seat in state["order"]:
+			var v := int(state["players"][seat]["score"])
+			if v < worst:
+				worst = v
+				behind = String(seat)
+		state["first_seat"] = behind
+	elif String(out["winner"]) != "":
 		state["first_seat"] = String(out["winner"])
 	out["match_over"] = is_match_over(state)
 	state["over"] = bool(out["match_over"])
