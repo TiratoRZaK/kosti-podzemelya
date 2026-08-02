@@ -22,6 +22,10 @@ var type_id: String = "basic"
 var seat_index: int = 0     # 0 кость, 1 кровь, 2 мох, 3 лазурь
 var show_badge: bool = true      # скрытый тип чужого куба значка не получает
 var shield_charges: int = 0
+## Куб лежит рубашкой: цвет владельца виден, значение — нет. Нужен на битве за
+## первый ход, где кубы стоят под стаканчиками: пока стакан не поднят, значения
+## не должно быть видно ни своего, ни чужого.
+var face_down: bool = false
 
 ## Куб перехватывает тапы только когда по нему действительно можно нажать.
 ## Иначе куб на доске съедал тап, предназначенный клетке под ним, и нажималась
@@ -98,9 +102,9 @@ func _apply() -> void:
 	_mat.set_shader_parameter("glow_col", Palette.GOLD_LIGHT)
 	_mat.set_shader_parameter("shield_col", Palette.CYAN)
 	_mat.set_shader_parameter("shielded", 1.0 if shield_charges > 0 else 0.0)
-	_value_label.text = str(value)
+	_value_label.text = "" if face_down else str(value)
 	_value_label.add_theme_color_override("font_color", f["ink"])
-	_badge_label.text = String(Rules.TYPES[type_id]["icon"]) if show_badge else ""
+	_badge_label.text = "" if face_down else (String(Rules.TYPES[type_id]["icon"]) if show_badge else "")
 	_pips.queue_redraw()
 
 func _sync_size() -> void:
@@ -169,6 +173,16 @@ func _get_param(param: String) -> float:
 ## Заряды щита — точки под его знаком: сколько ходов соперника он ещё держит.
 ## Прежние полоски сверху ставились отдельно от щита и читались как царапины.
 func _draw_pips() -> void:
+	if face_down:
+		# рубашка: ромб на грани. Пустая грань читалась как «куб без значения»,
+		# то есть как ошибка отрисовки, а не как «значение спрятано»
+		var f := Palette.face_of(seat_index)
+		var c := size * 0.5
+		var rr := size.y * 0.24
+		_pips.draw_colored_polygon(PackedVector2Array([
+			c + Vector2(0, -rr), c + Vector2(rr, 0), c + Vector2(0, rr), c + Vector2(-rr, 0),
+		]), Color(f["deep"], 0.75))
+		return
 	if shield_charges <= 0 and type_id != "shield":
 		return
 	var r := maxf(2.0, size.y * 0.032)

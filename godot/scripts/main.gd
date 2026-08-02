@@ -124,8 +124,17 @@ var duel_row: HBoxContainer
 var duel_note: Label
 var duel_count: Label
 var duel_hand: Control          # площадка, откуда игрок бросает свой куб
+var duel_input: Control         # прозрачный слой поверх битвы: ловит свайп
 var duel_hint: Label
 var duel_throw_from := Vector2.ZERO   # откуда полетел куб после свайпа
+# состояние броска свайпом: только поля, лямбды копируют локальные переменные
+var _throw_die_node: DieView
+var _throw_idle: Tween
+var _throw_dragging := false
+var _throw_done := false
+var _throw_speed := Vector2.ZERO
+var _throw_last_at := Vector2.ZERO
+var _throw_last_ms := 0
 
 func _ready() -> void:
 	_parse_args()
@@ -349,6 +358,8 @@ func _parse_args() -> void:
 			_shot_mode = "duel_open"
 		elif a == "--shot-duel-hand":
 			_shot_mode = "duel_hand"
+		elif a == "--shot-duel-swipe":
+			_shot_mode = "duel_swipe"
 		elif a == "--shot-three":
 			_shot_mode = "three"
 		elif a == "--shot-durak3":
@@ -464,6 +475,7 @@ func _build_ui() -> void:
 	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	strip_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	strip_scroll.add_child(hist_strip)
+	_hide_scrollbar(strip_scroll)
 	root.add_child(strip_scroll)
 	# Место под карточку хода держим всегда, иначе доска и рука прыгают. И держим
 	# его ЖЁСТКО: на большой доске жетонов бывает три ряда, карточка вырастала и
@@ -476,6 +488,7 @@ func _build_ui() -> void:
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	card_scroll.add_child(card_box)
+	_hide_scrollbar(card_scroll)
 	root.add_child(card_scroll)
 	root.add_child(_my_zone())
 
@@ -524,6 +537,22 @@ func _build_ui() -> void:
 	add_child(bcenter)
 	bpanel.modulate.a = 0.0
 
+## Спрятать ручку прокрутки, оставив саму прокрутку.
+##
+## Серая полоса под лентой ходов и в карточке занимала место и выглядела как
+## деталь не отсюда. Просто спрятать узел мало — ScrollContainer возвращает его
+## видимость при пересчёте, поэтому гасим оформление (пустые стили) и обнуляем
+## минимальный размер: полоса остаётся, но не рисуется и не ест высоту.
+func _hide_scrollbar(sc: ScrollContainer) -> void:
+	for bar in [sc.get_h_scroll_bar(), sc.get_v_scroll_bar()]:
+		if bar == null:
+			continue
+		var empty := StyleBoxEmpty.new()
+		for part in ["scroll", "scroll_focus", "grabber", "grabber_highlight", "grabber_pressed"]:
+			bar.add_theme_stylebox_override(part, empty)
+		bar.custom_minimum_size = Vector2.ZERO
+		bar.modulate.a = 0.0
+
 func _title_block() -> Control:
 	var box := VBoxContainer.new()
 	var t := _label("КОСТИ ПОДЗЕМЕЛЬЯ", 25, Palette.GOLD, Palette.FONT_TITLE)
@@ -548,25 +577,43 @@ func _foe_zone() -> Control:
 func _foe_row(seat: String, compact: bool) -> Control:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 3)
+	# Строка делится на три равные доли: слева имя, ровно посередине сердца,
+	# справа счёт. Раньше это был поток из имени, распорок и счёта — и стоило
+	# появиться маркеру хода, как имя удлинялось, а сердца и звёзды уезжали в
+	# сторону. Строка дёргалась каждый ход.
 	var row := HBoxContainer.new()
 	v.add_child(row)
+	var left := HBoxContainer.new()
+	left.add_theme_constant_override("separation", 2)
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(left)
+	# место под маркер занято всегда, даже когда маркера нет
+	var mark := _label("▶" if String(state["turn"]) == seat else " ", 11, Palette.GOLD_LIGHT)
+	mark.custom_minimum_size.x = 12
+	left.add_child(mark)
 	# имя в цвете лица его кубов: с тремя игроками иначе не понять, кто где
 	var face: Dictionary = Palette.face_of(int(state["order"].find(seat)))
 	var nm := _label(_who_name(state, seat), 12, face["mid"])
-	row.add_child(nm)
-	row.add_child(_grow())
+	left.add_child(nm)
+	left.add_child(_grow())
 	var kind := String(state["cfg"]["kind"])
+	var mid := CenterContainer.new()
+	mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(mid)
 	if kind == "lives" or kind == "bo3":
 		var pips := LifeRow.new()
 		if kind == "lives":
 			pips.setup(Rules.LIVES_MAX, int(state["players"][seat]["lives"]))
 		else:
 			pips.setup(2, int(state["players"][seat]["wins"]), LifeRow.KIND_STAR, Palette.GOLD)
-		row.add_child(pips)
-		row.add_child(_grow())
+		mid.add_child(pips)
+	var right := HBoxContainer.new()
+	right.alignment = BoxContainer.ALIGNMENT_END
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(right)
 	var sc := _label(_score_text(seat, kind, state["cfg"]), 20 if not compact else 16,
 		Palette.GOLD_LIGHT, Palette.FONT_UI)
-	row.add_child(sc)
+	right.add_child(sc)
 	# рубашки руки показываем, только когда соперник один: втроём места нет
 	if not compact:
 		var row2 := HBoxContainer.new()
@@ -582,11 +629,9 @@ func _foe_row(seat: String, compact: bool) -> Control:
 		row2.add_child(_grow())
 		row2.add_child(_label("Колода: %d" % state["players"][seat]["deck"].size(), 11, Palette.MUTED))
 	else:
-		row.add_child(_label("  %d в руке" % state["players"][seat]["hand"].size(), 11, Palette.MUTED))
-	# чей сейчас ход — видно по подсветке строки
-	if String(state["turn"]) == seat:
-		nm.add_theme_color_override("font_color", Palette.NEG)
-		nm.text = "▶ " + nm.text
+		right.add_child(_label("  %d в руке" % state["players"][seat]["hand"].size(), 11, Palette.MUTED))
+	# чей сейчас ход — видно по маркеру слева; имя цвет не меняет, он значит
+	# принадлежность кубов, а не очередь
 	return v
 
 func _turn_bar() -> Control:
@@ -1659,6 +1704,16 @@ func _build_duel() -> Control:
 	duel_hint = _label("", 12, Palette.GOLD_LIGHT)
 	duel_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(duel_hint)
+	# Ввод битвы ловит отдельный прозрачный слой поверх всего.
+	#
+	# Вешать его на сам куб нельзя, и это была ровно та причина, по которой «свайп
+	# нихуя не работал»: палец за первые же миллисекунды уходит с куба 64×64, а
+	# события ниже по дереву к нему больше не приходят. Плюс на телефоне идут
+	# InputEventScreenTouch/Drag, а не мышиные, — их надо разбирать отдельно.
+	duel_input = Control.new()
+	duel_input.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	duel_input.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(duel_input)
 	return layer
 
 func _start_duel(after: Callable) -> void:
@@ -1708,7 +1763,11 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 		var col := VBoxContainer.new()
 		col.add_theme_constant_override("separation", 6)
 		duel_row.add_child(col)
-		var nm := _label(_who_name(state, String(seat)), 11, Palette.MUTED)
+		# имя и площадка в цвете кубов игрока: за столом на четверых иначе не
+		# разобрать, где чей стаканчик
+		var seat_no := int(state["order"].find(String(seat)))
+		var face: Dictionary = Palette.face_of(seat_no)
+		var nm := _label(_who_name(state, String(seat)), 11, face["mid"])
 		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		col.add_child(nm)
 		# куб и стаканчик лежат в одной ячейке: стакан просто выше по слою
@@ -1722,7 +1781,7 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 		var pad_sb := StyleBoxFlat.new()
 		pad_sb.bg_color = Color(0, 0, 0, 0.28)
 		pad_sb.set_corner_radius_all(12)
-		pad_sb.border_color = Palette.CELL_EDGE
+		pad_sb.border_color = Color(face["mid"], 0.55)
 		pad_sb.set_border_width_all(2)
 		pad_rect.add_theme_stylebox_override("panel", pad_sb)
 		pad_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1736,9 +1795,11 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 		d.custom_minimum_size = Vector2(48, 48)
 		d.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		d.visible = false          # появится, когда куб долетит до места
+		# и появится рубашкой: до подъёма стаканчиков значений не видно ни своего,
+		# ни чужих — иначе исход битвы читается заранее и она теряет смысл
+		d.face_down = true
 		slot.add_child(d)
-		d.setup(int(rolls[seat]), "basic", String(seat) == "p", false, 0,
-			int(state["order"].find(String(seat))))
+		d.setup(int(rolls[seat]), "basic", String(seat) == "p", false, 0, seat_no)
 		dice.append(d)
 		var cup := CupView.new()
 		cup.size = Vector2(84, 96)
@@ -1790,10 +1851,18 @@ func _duel_round(rolls: Dictionary, last: bool, winner: String) -> void:
 		tw2.tween_property(cup, "position:y", -70.0, 0.32).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 		tw2.tween_property(cup, "modulate:a", 0.0, 0.32)
 	await get_tree().create_timer(0.4).timeout
-	for d in dice:
+	# вот теперь значения: кубы лежали рубашкой всю битву
+	for i in dice.size():
+		var d: DieView = dice[i]
+		d.face_down = false
+		d.setup(int(rolls[state["order"][i]]), "basic", String(state["order"][i]) == "p",
+			false, 0, i)
 		d.play_place()
 	if last:
-		duel_note.text = "%s ходит первым!" % _who_name(state, winner)
+		# «ТЫ ходит первым» — та же ошибка, что когда-то с «Ты теряет ♥»: фраза
+		# строилась в третьем лице, а имя своего сиденья «Ты»
+		var says := _says(state, winner, "ходишь первым!", "ходит первым!")
+		duel_note.text = says.substr(0, 1).to_upper() + says.substr(1)
 		_flash_screen(Color(1, 0.82, 0.35, 0.25), 0.4)
 		buzz(120)
 	await get_tree().create_timer(0.9 if last else 0.5).timeout
@@ -1815,9 +1884,12 @@ func _await_throw(value: int, idx: int) -> float:
 	d.custom_minimum_size = Vector2(64, 64)
 	d.mouse_filter = Control.MOUSE_FILTER_STOP
 	d.setup(value, "basic", idx == 0, false, 0, idx)
-	duel_hand.add_child(d)
+	# куб живёт в том же узле, что ловит ввод: тогда координаты касания и позиция
+	# куба — одна система, и он точно идёт за пальцем
+	duel_input.add_child(d)
 	await get_tree().process_frame
-	var home := Vector2(duel_hand.size.x * 0.5 - 32.0, duel_hand.size.y - 76.0)
+	var home: Vector2 = duel_hand.global_position - duel_input.global_position \
+		+ Vector2(duel_hand.size.x * 0.5 - 32.0, duel_hand.size.y - 76.0)
 	d.position = home
 	d.pivot_offset = d.size * 0.5
 	# лёгкое «дыхание»: куб выглядит взятым в руку, а не забытым на столе
@@ -1825,41 +1897,32 @@ func _await_throw(value: int, idx: int) -> float:
 	idle.tween_property(d, "position:y", home.y - 6.0, 0.7).set_trans(Tween.TRANS_SINE)
 	idle.tween_property(d, "position:y", home.y, 0.7).set_trans(Tween.TRANS_SINE)
 
-	var dragging := false
-	var speed := Vector2.ZERO
-	var thrown := false
-	var grab := Vector2.ZERO
+	# Состояние броска лежит в полях класса, а не в локальных переменных.
+	#
+	# Это и была причина «свайп нихуя не работает»: в GDScript лямбда захватывает
+	# локальные переменные КОПИЕЙ, поэтому `thrown = true` внутри обработчика
+	# ввода не видел цикл ожидания снаружи. Куб послушно ходил за пальцем, а
+	# бросок не засчитывался никогда — до автоброска через восемь секунд.
+	_throw_die_node = d
+	_throw_idle = idle
+	_throw_dragging = false
+	_throw_done = false
+	_throw_speed = Vector2.ZERO
+	_throw_last_at = Vector2.ZERO
+	_throw_last_ms = 0
 	var waited := 0.0
-	if _shot_path != "" and _shot_mode != "duel_hand":
+	if _shot_path != "" and _shot_mode != "duel_hand" and _shot_mode != "duel_swipe":
 		# снимок экрана свайпнуть некому: бросаем сразу, средней силой.
 		# Отдельный сценарий `duel_hand` наоборот ждёт — им проверяется вид
 		# экрана в момент, когда куб лежит в руке
-		thrown = true
-		speed = Vector2(0, -1400)
-	d.gui_input.connect(func(e: InputEvent):
-		if thrown:
-			return
-		if e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
-			if e.pressed:
-				dragging = true
-				grab = e.position
-				if idle.is_valid():
-					idle.kill()
-				buzz(10)
-			else:
-				thrown = true
-		elif dragging and e is InputEventMouseMotion:
-			d.position += e.position - grab
-			speed = e.velocity
-		elif dragging and e is InputEventScreenDrag:
-			d.position += e.relative
-			speed = e.velocity
-	)
+		_throw_done = true
+		_throw_speed = Vector2(0, -1400)
+	duel_input.gui_input.connect(_on_throw_input)
+
 	# Пока куб в руке, значения на нём мельтешат. Настоящее он покажет только
-	# приземлившись: иначе игрок читает исход битвы ещё до броска, и бросать
-	# становится незачем.
+	# когда поднимут стаканчик: иначе игрок читает исход битвы заранее.
 	var tick := 0.0
-	while not thrown and waited < 8.0:
+	while not _throw_done and waited < 8.0:
 		var dt := get_process_delta_time()
 		waited += dt
 		tick += dt
@@ -1867,12 +1930,66 @@ func _await_throw(value: int, idx: int) -> float:
 			tick = 0.0
 			d.setup(rng.randi_range(1, 6), "basic", idx == 0, false, 0, idx)
 		await get_tree().process_frame
+	duel_input.gui_input.disconnect(_on_throw_input)
 	if idle.is_valid():
 		idle.kill()
 	duel_throw_from = d.global_position - duel_layer.global_position
 	d.queue_free()
+	_throw_die_node = null
+	var power := clampf(_throw_speed.length() / 2500.0, 0.0, 1.0)
+	if _shot_mode == "duel_swipe":
+		print("[свайп] скорость=%.0f px/с сила=%.2f ждали=%.1f с" % [
+			_throw_speed.length(), power, waited])
 	# 2500 px/с — уверенный резкий свайп; всё, что выше, уже одинаково «сильно»
-	return clampf(speed.length() / 2500.0, 0.0, 1.0)
+	return power
+
+## Ввод во время броска. Отдельным методом, а не лямбдой: состояние обязано
+## жить в полях объекта, иначе цикл ожидания не узнает, что бросок случился.
+func _on_throw_input(e: InputEvent) -> void:
+	if _throw_done or _throw_die_node == null or not is_instance_valid(_throw_die_node):
+		return
+	var press := -1        # 1 нажали, 0 отпустили, -1 не кнопка
+	var at := Vector2.ZERO
+	if e is InputEventScreenTouch:
+		press = 1 if e.pressed else 0
+		at = e.position
+	elif e is InputEventMouseButton and e.button_index == MOUSE_BUTTON_LEFT:
+		press = 1 if e.pressed else 0
+		at = e.position
+	elif e is InputEventScreenDrag or e is InputEventMouseMotion:
+		at = e.position
+	else:
+		return
+	var d: DieView = _throw_die_node
+	if press == 1:
+		_throw_dragging = true
+		_throw_speed = Vector2.ZERO
+		_throw_last_ms = 0
+		if _throw_idle != null and _throw_idle.is_valid():
+			_throw_idle.kill()
+		d.position = at - d.size * 0.5
+		_throw_track(at)
+		buzz(10)
+	elif press == 0:
+		if _throw_dragging:
+			_throw_track(at)
+			_throw_done = true
+	elif _throw_dragging:
+		# куб держится центром под пальцем: так он не убегает от касания и
+		# бросок ощущается как настоящий замах
+		d.position = at - d.size * 0.5
+		_throw_track(at)
+
+## Скорость свайпа считаем сами по двум последним точкам: `velocity` у события
+## на Android приходит нулевой чаще, чем хотелось бы, и бросок выходил вялым.
+func _throw_track(at: Vector2) -> void:
+	var now := Time.get_ticks_msec()
+	var dt := float(now - _throw_last_ms) / 1000.0
+	if _throw_last_ms > 0 and dt > 0.004:
+		# сглаживаем: одиночный рывок пальца не должен решать всё
+		_throw_speed = _throw_speed * 0.35 + ((at - _throw_last_at) / dt) * 0.65
+	_throw_last_at = at
+	_throw_last_ms = now
 
 ## Полёт куба в свой слот: дуга, кувырки и мельтешение значений.
 ##
@@ -1891,7 +2008,9 @@ func _fly_die(value: int, idx: int, slot: Control, target: DieView, power: float
 	d.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	d.pivot_offset = Vector2(24, 24)
 	d.position = from
-	d.setup(value, "basic", idx == 0, false, 0, idx)
+	# летящий куб настоящего значения не показывает НИ РАЗУ, даже первым кадром:
+	# оно откроется под стаканчиком
+	d.setup(rng.randi_range(1, 6), "basic", idx == 0, false, 0, idx)
 	duel_layer.add_child(d)
 	var dur := clampf(0.78 - power * 0.26, 0.44, 0.86)
 	var arc := clampf(70.0 + power * 190.0, 70.0, 260.0)
@@ -1913,8 +2032,8 @@ func _fly_die(value: int, idx: int, slot: Control, target: DieView, power: float
 			d.setup(rng.randi_range(1, 6), "basic", idx == 0, false, 0, idx)
 	await get_tree().create_timer(maxf(0.0, dur - flip)).timeout
 	if is_instance_valid(d):
-		d.setup(value, "basic", idx == 0, false, 0, idx)
 		d.queue_free()
+	# на месте куба остаётся рубашка: значение ждёт подъёма стаканчика
 	target.visible = true
 	target.play_place()
 	_shake(3.0, 0.12)
@@ -1959,6 +2078,7 @@ func _build_draft() -> Control:
 	scroll.custom_minimum_size = Vector2(330, 330)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.add_child(draft_grid)
+	_hide_scrollbar(scroll)
 	v.add_child(scroll)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -2680,6 +2800,7 @@ func _build_rules() -> Control:
 	center.add_child(panel)
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(330, 640)
+	_hide_scrollbar(scroll)
 	panel.add_child(scroll)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
@@ -3590,6 +3711,10 @@ func _play_card(res: Dictionary) -> void:
 	await get_tree().process_frame
 
 	for i in parts.size():
+		# карточку могло пересобрать за время ожидания кадров и полётов чисел —
+		# новый ход, конец раунда, пересчёт раскладки. Тогда играть уже нечего
+		if not is_instance_valid(chips) or i >= chips.get_child_count():
+			return
 		var p: Dictionary = parts[i]
 		var chip: Control = chips.get_child(i)
 		if p.has("hl"):
@@ -4019,6 +4144,22 @@ func _pop_in(node: Control, overshoot: float = 1.12) -> void:
 	tw.tween_property(node, "scale", Vector2(overshoot, overshoot), 0.10).set_ease(Tween.EASE_OUT)
 	tw.tween_property(node, "scale", Vector2.ONE, 0.12)
 
+## Поддельные касания: ими сценарий `--shot-duel-swipe` проверяет, что бросок
+## свайпом вообще срабатывает. Руками это не проверить — окна игры я не вижу.
+func _fake_touch(at: Vector2, down: bool) -> void:
+	var e := InputEventScreenTouch.new()
+	e.index = 0
+	e.pressed = down
+	e.position = at
+	get_viewport().push_input(e, true)
+
+func _fake_drag(at: Vector2, rel: Vector2) -> void:
+	var e := InputEventScreenDrag.new()
+	e.index = 0
+	e.position = at
+	e.relative = rel
+	get_viewport().push_input(e, true)
+
 # ------------------------------------------------------- снимки для проверки
 
 func _shot_scenario() -> void:
@@ -4090,16 +4231,30 @@ func _shot_scenario() -> void:
 			opponent = "bot"
 			_start_mode("classic")
 			await get_tree().create_timer(0.5).timeout
+		"duel_swipe":
+			# проверка свайпа без человека: шлём касание, тянем вверх, отпускаем
+			opponent = "bot"
+			_start_mode("classic")
+			await get_tree().create_timer(0.8).timeout
+			var at := Vector2(195.0, 700.0)
+			_fake_touch(at, true)
+			for i in 8:
+				at += Vector2(6, -46)
+				_fake_drag(at, Vector2(6, -46))
+				await get_tree().process_frame
+			_fake_touch(at, false)
+			await get_tree().create_timer(0.45).timeout
 		"duel_hand":
 			# куб лежит в руке и ждёт свайпа
 			opponent = "bot"
 			_start_mode("classic")
 			await get_tree().create_timer(0.7).timeout
 		"duel_open":
-			# момент, когда стаканчики уже поднялись
+			# момент, когда стаканчики уже поднялись. Битва идёт дольше, чем раньше:
+			# каждый бросает по очереди, потом отсчёт — отсюда пять секунд
 			opponent = "bot"
 			_start_mode("classic")
-			await get_tree().create_timer(2.7).timeout
+			await get_tree().create_timer(5.2).timeout
 		"roster":
 			roster_kinds = ["bot", "bot", "off"]
 			_show_roster()
