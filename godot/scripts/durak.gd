@@ -21,16 +21,17 @@ const MAX_TABLE := 6
 
 # --------------------------------------------------------------- создание
 
+## roster — состав на троих и четверых; пустой означает игру на двоих.
 static func new_game(seed_value: int, opponent: String, my_seat: String = "p",
-		foe_name: String = "Соперник", my_name: String = "") -> Dictionary:
-	var order := ["p", "e"]
+		foe_name: String = "Соперник", my_name: String = "", roster: Array = []) -> Dictionary:
+	var order: Array = MatchState.seat_ids(roster.size()) if roster.size() >= 2 else ["p", "e"]
 	var players := {}
 	for seat in order:
 		players[seat] = {"hand": []}
 	var state := {
 		"mode": "durak", "kind": "durak", "seed": seed_value,
 		"order": order, "players": players,
-		"seats": MatchState.make_seats(opponent, my_seat, foe_name, my_name),
+		"seats": MatchState.make_roster_seats(roster) if roster.size() >= 2 			else MatchState.make_seats(opponent, my_seat, foe_name, my_name),
 		"talon": [], "discard": 0, "trump": 0,
 		"table": [], "attacker": "p", "max_att": MAX_TABLE,
 		"phase": "attack", "shown_to": "", "over": false, "outcome": {},
@@ -40,8 +41,8 @@ static func new_game(seed_value: int, opponent: String, my_seat: String = "p",
 	# козырь — масть нижнего куба колоды
 	state["trump"] = int(state["talon"][0]["suit"])
 	for i in HAND_SIZE:
-		players["p"]["hand"].append(state["talon"].pop_back())
-		players["e"]["hand"].append(state["talon"].pop_back())
+		for seat in order:
+			players[seat]["hand"].append(state["talon"].pop_back())
 	state["attacker"] = first_attacker(state)
 	start_bout(state)
 	return state
@@ -101,6 +102,30 @@ static func undefended_idx(state: Dictionary) -> int:
 			return i
 	return -1
 
+## Защитник — следующий по кругу за атакующим, у кого ещё есть кубы. Вышедших
+## пропускаем: иначе роль достаётся тому, кому нечем ни бить, ни подкидывать, и
+## кон встаёт намертво — партия втроём зацикливалась.
+static func defender_of(state: Dictionary, attacker: String) -> String:
+	var order: Array = state["order"]
+	var n := order.size()
+	var i := order.find(attacker)
+	for k in range(1, n + 1):
+		var cand := String(order[(i + k) % n])
+		if cand != attacker and not hand_of(state, cand).is_empty():
+			return cand
+	return String(order[(i + 1) % n])
+
+## Следующий по кругу, у кого остались кубы: им передаётся право атаки.
+static func next_with_dice(state: Dictionary, from: String) -> String:
+	var order: Array = state["order"]
+	var n := order.size()
+	var i := order.find(from)
+	for k in range(1, n + 1):
+		var cand := String(order[(i + k) % n])
+		if not hand_of(state, cand).is_empty():
+			return cand
+	return from
+
 static func other_seat(state: Dictionary, seat: String) -> String:
 	return MatchState.other_seat(state, seat)
 
@@ -112,41 +137,49 @@ static func actor(state: Dictionary) -> String:
 	if String(state["phase"]) == "attack":
 		return String(state["attacker"])
 	if String(state["phase"]) == "defend":
-		return other_seat(state, String(state["attacker"]))
+		return defender_of(state, String(state["attacker"]))
 	return ""
 
 # --------------------------------------------------------------------- кон
 
 static func start_bout(state: Dictionary) -> void:
 	state["table"] = []
+	# вышедший не может атаковать: право уходит следующему с кубами
+	if hand_of(state, String(state["attacker"])).is_empty():
+		state["attacker"] = next_with_dice(state, String(state["attacker"]))
 	# атак не больше, чем кубов было у защитника на начало кона
-	state["max_att"] = mini(MAX_TABLE, hand_of(state, other_seat(state, String(state["attacker"]))).size())
+	state["max_att"] = mini(MAX_TABLE, hand_of(state, defender_of(state, String(state["attacker"]))).size())
 	if check_end(state):
 		return
 	state["phase"] = "attack"
 
 static func refill_hands(state: Dictionary) -> void:
 	# первым добирает атакующий — как в картах
-	var order := [String(state["attacker"]), other_seat(state, String(state["attacker"]))]
-	for seat in order:
+	# добирают по кругу, начиная с атакующего — как в картах
+	var order: Array = state["order"]
+	var start := order.find(String(state["attacker"]))
+	for k in order.size():
+		var seat := String(order[(start + k) % order.size()])
 		var hand: Array = hand_of(state, seat)
 		while hand.size() < HAND_SIZE and not state["talon"].is_empty():
 			hand.append(state["talon"].pop_back())
 
-## Партия кончается, когда колода пуста и кто-то вышел. Остался с кубами — Дуракуб.
+## Партия кончается, когда колода пуста и с кубами остался один. Он и дуракуб.
 static func check_end(state: Dictionary) -> bool:
 	if not state["talon"].is_empty():
 		return false
-	var p_out: bool = hand_of(state, "p").is_empty()
-	var e_out: bool = hand_of(state, "e").is_empty()
-	if not p_out and not e_out:
+	var with_dice := []
+	for seat in state["order"]:
+		if not hand_of(state, seat).is_empty():
+			with_dice.append(seat)
+	if with_dice.size() > 1:
 		return false
 	state["phase"] = "over"
 	state["over"] = true
-	if p_out and e_out:
-		state["outcome"] = {"loser": "", "detail": "Оба вышли одновременно — дуракубов сегодня нет."}
+	if with_dice.is_empty():
+		state["outcome"] = {"loser": "", "detail": "Все вышли одновременно — дуракубов сегодня нет."}
 	else:
-		var loser := "e" if p_out else "p"
+		var loser := String(with_dice[0])
 		state["outcome"] = {"loser": loser, "detail": "Остался с кубами: %s" % MatchState.seat_name(state, loser)}
 	return true
 
@@ -155,7 +188,7 @@ static func bout_beaten(state: Dictionary) -> void:
 	state["table"] = []
 	refill_hands(state)
 	# отбился — роли меняются
-	state["attacker"] = other_seat(state, String(state["attacker"]))
+	state["attacker"] = defender_of(state, String(state["attacker"]))
 	start_bout(state)
 
 static func bout_taken(state: Dictionary, taker: String) -> void:
@@ -174,7 +207,13 @@ static func bout_taken(state: Dictionary, taker: String) -> void:
 ## Все действия проверяют, что сиденье действительно его: это же правило потом
 ## отсечёт чужие ходы по сети.
 static func attack(state: Dictionary, seat: String, hand_idx: int) -> Dictionary:
-	if String(state["phase"]) != "attack" or seat != String(state["attacker"]):
+	if String(state["phase"]) != "attack":
+		return {}
+	# подкидывать может любой, кроме защитника: на двоих это по-прежнему только
+	# атакующий, втроём — и третий игрок тоже
+	if seat == defender_of(state, String(state["attacker"])):
+		return {}
+	if state["table"].is_empty() and seat != String(state["attacker"]):
 		return {}
 	var hand: Array = hand_of(state, seat)
 	if hand_idx < 0 or hand_idx >= hand.size():
@@ -184,7 +223,7 @@ static func attack(state: Dictionary, seat: String, hand_idx: int) -> Dictionary
 		return {}
 	if state["table"].size() >= int(state["max_att"]):
 		return {}
-	if hand_of(state, other_seat(state, seat)).is_empty():
+	if hand_of(state, defender_of(state, String(state["attacker"]))).is_empty():
 		return {}
 	hand.remove_at(hand_idx)
 	state["table"].append({"a": die, "d": null})
@@ -192,7 +231,7 @@ static func attack(state: Dictionary, seat: String, hand_idx: int) -> Dictionary
 	return {"act": "attack", "seat": seat, "die": die, "first": state["table"].size() == 1}
 
 static func defend(state: Dictionary, seat: String, hand_idx: int) -> Dictionary:
-	if String(state["phase"]) != "defend" or seat != other_seat(state, String(state["attacker"])):
+	if String(state["phase"]) != "defend" or seat != defender_of(state, String(state["attacker"])):
 		return {}
 	var idx := undefended_idx(state)
 	if idx < 0:
@@ -219,7 +258,7 @@ static func bito(state: Dictionary, seat: String) -> Dictionary:
 	return {"act": "bito", "seat": seat, "pairs": n}
 
 static func take(state: Dictionary, seat: String) -> Dictionary:
-	if String(state["phase"]) != "defend" or seat != other_seat(state, String(state["attacker"])):
+	if String(state["phase"]) != "defend" or seat != defender_of(state, String(state["attacker"])):
 		return {}
 	var n: int = state["table"].size()
 	bout_taken(state, seat)

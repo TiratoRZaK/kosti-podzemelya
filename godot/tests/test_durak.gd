@@ -24,6 +24,7 @@ func _init() -> void:
 	print("--- дуракуб: партия целиком ---")
 	print("")
 	full_game_case()
+	three_case()
 
 	print("")
 	if fails > 0:
@@ -215,3 +216,69 @@ func _table(s: Dictionary) -> String:
 		out.append("%s/%s" % [Durak.die_label(pair["a"]),
 			"—" if pair["d"] == null else Durak.die_label(pair["d"])])
 	return " ".join(out)
+
+## Дуракуб втроём: защитник — сосед слева, подкидывать может и третий, дуракубом
+## остаётся тот, у кого последнего остались кубы.
+func three_case() -> void:
+	var roster := [
+		{"kind": "bot", "local": false, "name": "Первый"},
+		{"kind": "bot", "local": false, "name": "Второй"},
+		{"kind": "bot", "local": false, "name": "Третий"},
+	]
+	var s := Durak.new_game(31337, "bot", "p", "Соперник", "", roster)
+	var deal_ok: bool = s["order"].size() == 3 and s["talon"].size() == 24 - 18
+	for seat in s["order"]:
+		if Durak.hand_of(s, seat).size() != 6:
+			deal_ok = false
+	check(deal_ok, "втроём: по шесть кубов каждому, в колоде шесть",
+		"колода=%d, руки %d/%d/%d" % [s["talon"].size(),
+			Durak.hand_of(s, "p").size(), Durak.hand_of(s, "e").size(), Durak.hand_of(s, "c").size()])
+
+	var att := String(s["attacker"])
+	var deff := Durak.defender_of(s, att)
+	var third := Durak.defender_of(s, deff)
+	check(deff != att and third != att and third != deff,
+		"втроём: защитник — сосед слева, третий отдельно", "атакует %s, отбивается %s, третий %s" % [att, deff, third])
+
+	# третий может подкинуть, защитник — нет
+	s["trump"] = 0
+	Durak.hand_of(s, att).assign([{"value": 4, "suit": 1}])
+	Durak.hand_of(s, third).assign([{"value": 4, "suit": 2}, {"value": 6, "suit": 3}])
+	Durak.hand_of(s, deff).assign([{"value": 5, "suit": 1}, {"value": 4, "suit": 3}])
+	s["phase"] = "attack"
+	s["max_att"] = 3
+	Durak.attack(s, att, 0)
+	var by_def := Durak.attack(s, deff, 1)      # защитник подкидывать не может
+	s["phase"] = "attack"
+	var by_third := Durak.attack(s, third, 0)   # третий может: значение есть на столе
+	check(by_def.is_empty() and not by_third.is_empty(),
+		"втроём: подкидывает третий, а защитник — нет",
+		"защитник=%s третий=%s стол=%s" % [str(by_def.is_empty()), str(not by_third.is_empty()), _table(s)])
+
+	# полная партия ботов втроём доигрывается и все кубы на месте
+	var g := Durak.new_game(20260802, "bot", "p", "Соперник", "", roster)
+	var guard := 0
+	while not bool(g["over"]) and guard < 4000:
+		guard += 1
+		var actor := Durak.actor(g)
+		if actor == "":
+			break
+		var act := Durak.bot_action(g)
+		if act.is_empty():
+			break
+		match String(act["act"]):
+			"attack": Durak.attack(g, actor, int(act["hand"]))
+			"defend": Durak.defend(g, actor, int(act["hand"]))
+			"bito": Durak.bito(g, actor)
+			"take": Durak.take(g, actor)
+	var on_table := 0
+	for pair in g["table"]:
+		on_table += 1 + (1 if pair["d"] != null else 0)
+	var total: int = g["talon"].size() + int(g["discard"]) + on_table
+	for seat in g["order"]:
+		total += Durak.hand_of(g, seat).size()
+	check(bool(g["over"]) and total == 24 and guard < 4000,
+		"втроём: партия ботов доиграна, все 24 куба на месте",
+		"действий=%d | руки %d/%d/%d | колода=%d | отбой=%d | %s" % [guard,
+			Durak.hand_of(g, "p").size(), Durak.hand_of(g, "e").size(), Durak.hand_of(g, "c").size(),
+			g["talon"].size(), int(g["discard"]), String(g["outcome"].get("detail", ""))])

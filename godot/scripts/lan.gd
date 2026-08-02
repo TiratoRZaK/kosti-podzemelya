@@ -26,6 +26,8 @@ signal next_round_received
 signal match_left
 ## Хост присылает партию заново после переподключения: режим, сид, журнал ходов.
 signal resync_received(mode: String, seed_value: int, log: Array)
+## То же для стола на троих: вернувшемуся нужны ещё состав и его собственное место.
+signal party_resync_received(mode: String, seed_value: int, roster: Array, my_seat: String, log: Array)
 ## Действие Дуракуба: attack/defend по индексу куба в руке, bito/take без индекса.
 signal durak_action_received(seat: String, act: String, hand_idx: int)
 ## Соперник представился: имя его устройства. Нужно, чтобы вместо IP-адреса и
@@ -309,6 +311,27 @@ func send_next_round() -> void:
 		return
 	_remote_next_round.rpc()
 
+## Действие Дуракуба на троих: как и ход, идёт через хозяина игры — он применяет
+## у себя и раздаёт остальным. Напрямую между гостями пакеты не ходят.
+func send_durak_party(seat: String, act: String, hand_idx: int = -1) -> void:
+	if not connected:
+		return
+	if is_host:
+		_remote_durak.rpc(seat, act, hand_idx)
+	else:
+		_relay_durak.rpc_id(1, seat, act, hand_idx)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _relay_durak(seat: String, act: String, hand_idx: int) -> void:
+	if not is_host:
+		return
+	var from := multiplayer.get_remote_sender_id()
+	durak_action_received.emit(seat, act, hand_idx)
+	for p in lobby:
+		var pid := int(p["id"])
+		if pid != from:
+			_remote_durak.rpc_id(pid, seat, act, hand_idx)
+
 ## Выходим из партии в меню: сопернику уходит «вышел», а соединение закрывается
 ## вежливо — peer_disconnect_later сперва довозит очередь пакетов (само
 ## сообщение) и только потом рвёт связь. Жёсткий stop() сразу после отправки
@@ -320,6 +343,19 @@ func send_resync(mode: String, seed_value: int, log: Array) -> void:
 	if not connected:
 		return
 	_remote_resync.rpc(mode, seed_value, log)
+
+## Возврат в партию на троих: кроме журнала нужен состав и место вернувшегося —
+## иначе он не знает, за кого играет и кто остальные.
+func send_party_resync(peer_id: int, mode: String, seed_value: int, roster: Array,
+		seat: String, log: Array) -> void:
+	if not connected:
+		return
+	_remote_party_resync.rpc_id(peer_id, mode, seed_value, roster, seat, log)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _remote_party_resync(mode: String, seed_value: int, roster: Array, my_seat: String,
+		log: Array) -> void:
+	party_resync_received.emit(mode, seed_value, roster, my_seat, log)
 
 func send_leave() -> void:
 	if not connected:

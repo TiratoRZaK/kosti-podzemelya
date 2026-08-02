@@ -161,8 +161,11 @@ static func shuffled(rng: RandomNumberGenerator, arr: Array) -> Array:
 ## Восстановить партию по журналу: собираем от того же сида и повторяем ходы.
 ## Работает потому, что вся случайность идёт от сида, а ход — это три числа.
 static func replay(mode_key: String, seed_value: int, opponent: String, my_seat: String,
-		foe_name: String, my_name: String, picked: Array, log: Array) -> Dictionary:
-	var st := new_match(mode_key, seed_value, opponent, my_seat, foe_name, my_name, picked)
+		foe_name: String, my_name: String, picked: Array, log: Array,
+		roster: Array = []) -> Dictionary:
+	# состав обязателен, если игроков больше двух: иначе в партии не будет сидений
+	# «c» и «d», и ходы из журнала просто некому применить
+	var st := new_match(mode_key, seed_value, opponent, my_seat, foe_name, my_name, picked, roster)
 	for entry in log:
 		var seat := String(entry[0])
 		# ход мог прийти в конце раунда: доигрываем поток так же, как в живой игре

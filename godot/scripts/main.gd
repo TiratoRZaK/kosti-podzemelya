@@ -284,6 +284,8 @@ func _parse_args() -> void:
 			_shot_mode = "roster"
 		elif a == "--shot-three":
 			_shot_mode = "three"
+		elif a == "--shot-durak3":
+			_shot_mode = "durak3"
 		elif a == "--shot-name":
 			_shot_mode = "name_ask"
 		elif a == "--shot-modes":
@@ -758,9 +760,22 @@ func _d_refresh() -> void:
 	var table: Array = d_frozen if not d_frozen.is_empty() else d_state["table"]
 
 	d_my_name.text = MatchState.seat_name(d_state, me).to_upper()
-	d_foe_name.text = MatchState.seat_name(d_state, foe).to_upper()
 	d_my_count.text = "%d %s" % [my_hand.size(), _plural(my_hand.size(), "куб", "куба", "кубов")]
-	d_foe_count.text = "%d %s" % [foe_hand.size(), _plural(foe_hand.size(), "куб", "куба", "кубов")]
+	# соперников может быть двое-трое: имя, сколько кубов и кто сейчас действует
+	var foes := []
+	for seat in d_state["order"]:
+		if String(seat) != me:
+			foes.append(String(seat))
+	var lines := []
+	for seat in foes:
+		var n: int = Durak.hand_of(d_state, seat).size()
+		var mark := "▶ " if Durak.actor(d_state) == seat else ""
+		lines.append("%s%s — %d %s" % [mark, MatchState.seat_name(d_state, String(seat)).to_upper(),
+			n, _plural(n, "куб", "куба", "кубов")])
+	d_foe_name.text = "
+".join(lines)
+	d_foe_count.text = "" if foes.size() > 1 else "%d %s" % [foe_hand.size(),
+		_plural(foe_hand.size(), "куб", "куба", "кубов")]
 	d_talon.text = "Колода: %d" % d_state["talon"].size()
 	d_discard.text = "Бито: %d" % int(d_state["discard"])
 	d_trump_mark.setup(trump, Palette.GOLD_LIGHT)
@@ -780,7 +795,7 @@ func _d_refresh() -> void:
 
 	for c in d_foe_hand.get_children():
 		c.queue_free()
-	for i in foe_hand.size():
+	for i in (foe_hand.size() if foes.size() == 1 else 0):
 		var back := Panel.new()
 		back.custom_minimum_size = Vector2(22, 22)
 		back.add_theme_stylebox_override("panel", _mini_box())
@@ -980,9 +995,36 @@ func _start_durak(seed_value: int = -1) -> void:
 	state = {}
 	d_frozen = []
 	var sd := seed_value if seed_value >= 0 else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
+	var party: Array = roster_for_run if not roster_for_run.is_empty() else []
+	if seed_value < 0 and opponent == "roster":
+		party = _roster_for_match()
+		roster_for_run = party
 	if seed_value < 0 and opponent == "remote" and lan != null and lan.is_host:
-		lan.send_start("durak", sd)
-	d_state = Durak.new_game(sd, opponent, my_seat, foe_player, Profile.display_name())
+		if lan.table_seats > 2:
+			# стол на троих: раздаём сиденья и рассылаем состав, как в боевых режимах
+			var plain := [{"kind": "human", "name": Profile.display_name()}]
+			var seat_by_peer := {}
+			var ids := MatchState.seat_ids(lan.table_seats)
+			var at := 1
+			for p in lan.lobby:
+				plain.append({"kind": "human", "name": String(p["name"])})
+				seat_by_peer[int(p["id"])] = String(ids[at])
+				at += 1
+			var bots := 0
+			while plain.size() < lan.table_seats:
+				plain.append({"kind": "bot", "name": MatchState.BOT_NAMES[mini(bots, 3)]})
+				bots += 1
+			my_seat = "p"
+			lan.send_party("durak", sd, plain, seat_by_peer)
+			party = []
+			for i in plain.size():
+				var d: Dictionary = plain[i]
+				party.append({"kind": String(d["kind"]), "local": String(ids[i]) == my_seat,
+					"name": String(d["name"])})
+			roster_for_run = party
+		else:
+			lan.send_start("durak", sd)
+	d_state = Durak.new_game(sd, opponent, my_seat, foe_player, Profile.display_name(), party)
 	d_toast("")
 	busy = true
 	_d_refresh()
@@ -1068,7 +1110,10 @@ func _d_bot() -> void:
 ## кубом руки. Раздача у обоих от одного сида, поэтому индекса достаточно.
 func _d_send(seat: String, act: String, idx: int = -1) -> void:
 	if opponent == "remote" and lan != null and lan.connected:
-		lan.send_durak_action(seat, act, idx)
+		if lan.table_seats > 2 or not lan.is_host:
+			lan.send_durak_party(seat, act, idx)
+		else:
+			lan.send_durak_action(seat, act, idx)
 
 func _on_lan_durak_action(seat: String, act: String, hand_idx: int) -> void:
 	if d_state.is_empty() or not in_durak:
@@ -1915,6 +1960,7 @@ func _ensure_lan() -> void:
 	lan.resync_received.connect(_on_lan_resync)
 	lan.lobby_changed.connect(_on_lan_lobby)
 	lan.party_started.connect(_on_lan_party)
+	lan.party_resync_received.connect(_on_lan_party_resync)
 
 func _on_lan_hosts(list: Array) -> void:
 	if list.is_empty():
@@ -1967,6 +2013,58 @@ func _on_lan_resync(mode: String, seed_value: int, log: Array) -> void:
 	opponent = "remote"
 	state = MatchState.replay(mode, seed_value, "remote", my_seat, foe_player,
 		Profile.display_name(), [], log)
+	board_grid.columns = int(state["cfg"]["cols"])
+	hist_sel = -1
+	mode_tag.text = String(state["cfg"]["title"]).to_upper()
+	for c in card_box.get_children():
+		c.queue_free()
+	toast("Вернулись в партию")
+	_refresh()
+	_relayout_soon()
+	_begin_turn(String(state["turn"]))
+
+## Кто подключился последним: ему и отдаём место за столом.
+func _last_peer_id() -> int:
+	if lan == null or lan.lobby.is_empty():
+		return 1
+	return int(lan.lobby[lan.lobby.size() - 1]["id"])
+
+## Место для вернувшегося: берём сиденье удалённого игрока по порядку подключения.
+func _seat_for_peer(pid: int) -> String:
+	var ids: Array = state["order"]
+	var at := 1
+	for p in lan.lobby:
+		if int(p["id"]) == pid:
+			return String(ids[mini(at, ids.size() - 1)])
+		at += 1
+	return String(ids[1])
+
+## Вернулись в партию на троих: состав и место пришли от хозяина, состояние
+## собираем повтором журнала.
+func _on_lan_party_resync(mode: String, seed_value: int, roster: Array, seat_id: String,
+		log: Array) -> void:
+	_new_flow()
+	my_seat = seat_id
+	opponent = "remote"
+	var ids := MatchState.seat_ids(roster.size())
+	var mine := []
+	for i in roster.size():
+		var d: Dictionary = roster[i]
+		var kind := String(d.get("kind", "bot"))
+		var is_me: bool = String(ids[i]) == seat_id
+		if kind == "human" and not is_me:
+			kind = "remote"
+		mine.append({"kind": kind, "local": is_me, "name": String(d.get("name", "Игрок"))})
+	roster_for_run = mine
+	over_layer.visible = false
+	menu_layer.visible = false
+	lobby_layer.visible = false
+	in_durak = false
+	d_state = {}
+	durak_layer.visible = false
+	battle_root.visible = true
+	state = MatchState.replay(mode, seed_value, "remote", my_seat, foe_player,
+		Profile.display_name(), [], log, mine)
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -2037,6 +2135,9 @@ func _on_lan_party(mode: String, seed_value: int, roster: Array, seat_id: String
 			kind = "remote"
 		local_roster.append({"kind": kind, "local": mine, "name": String(d.get("name", "Игрок"))})
 	roster_for_run = local_roster
+	if mode == "durak":
+		await _start_durak(seed_value)
+		return
 	_launch_match(mode, seed_value, [], local_roster)
 
 func _on_lan_connected() -> void:
@@ -3545,6 +3646,15 @@ func _shot_scenario() -> void:
 			roster_kinds = ["bot", "bot", "off"]
 			_show_roster()
 			await get_tree().process_frame
+		"durak3":
+			# Дуракуб втроём: я и два бота
+			opponent = "roster"
+			roster_kinds = ["bot", "bot", "off"]
+			await _start_durak()
+			d_state["shown_to"] = "p"
+			busy = false
+			_d_refresh()
+			await get_tree().create_timer(0.3).timeout
 		"three":
 			# партия на троих: я и два бота
 			opponent = "roster"

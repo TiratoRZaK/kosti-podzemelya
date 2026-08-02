@@ -108,8 +108,10 @@ func run() -> void:
 
 	resync_case()
 	party_case()
+	party_resync_case()
 
 	durak_case()
+	durak_party_case()
 
 	client.close()
 	server.close()
@@ -346,3 +348,92 @@ func party_case() -> void:
 				seats_ok = false
 	check(same and seats_ok and moves >= 8,
 		"партия на троих: три взгляда на один стол совпадают после %d ходов" % moves, detail)
+
+## Возврат в партию на троих: вернувшемуся приходят состав, его место и журнал.
+## Если состав потерять, сидений «c» и «d» не будет и ходы применить некому.
+func party_resync_case() -> void:
+	var seed_value := 4711
+	var roster := [
+		{"kind": "human", "name": "Хозяин"},
+		{"kind": "human", "name": "Гость"},
+		{"kind": "bot", "name": "Костолом"},
+	]
+	var host_roster := []
+	for i in roster.size():
+		host_roster.append({"kind": String(roster[i]["kind"]), "local": i == 0,
+			"name": String(roster[i]["name"])})
+	var host := MatchState.new_match("classic", seed_value, "remote", "p", "Соперник",
+		"Хозяин", [], host_roster)
+	var rng := MatchState.make_rng(555)
+	for step in 10:
+		var seat := String(host["turn"])
+		if MatchState.moves_left(host, seat) <= 0 or not MatchState.has_legal(host, seat):
+			MatchState.advance(host)
+			continue
+		var mv := Bot.choose_move(host, seat, rng)
+		if mv.is_empty():
+			break
+		MatchState.play(host, seat, int(mv["hand"]), int(mv["cell"]))
+		MatchState.advance(host)
+
+	# гость возвращается: у него сиденье «e», состав и журнал
+	var guest_roster := []
+	for i in roster.size():
+		var kind := String(roster[i]["kind"])
+		if kind == "human" and i != 1:
+			kind = "remote"
+		guest_roster.append({"kind": kind, "local": i == 1, "name": String(roster[i]["name"])})
+	var back := MatchState.replay("classic", seed_value, "remote", "e", "Хозяин", "Гость",
+		[], host["log"], guest_roster)
+	var same: bool = _board(back) == _board(host) and String(back["turn"]) == String(host["turn"]) 		and back["order"].size() == 3 and _hand(back, "c") == _hand(host, "c")
+	check(same, "возврат в партию на троих: доска, очередь и рука третьего совпали",
+		"ходов=%d | хост %s | вернувшийся %s" % [host["log"].size(), _board(host), _board(back)])
+
+## Дуракуб втроём по сети: у каждого свой взгляд, действия применяются всеми.
+func durak_party_case() -> void:
+	var roster := [
+		{"kind": "human", "local": false, "name": "Хозяин"},
+		{"kind": "human", "local": false, "name": "Гость"},
+		{"kind": "bot", "local": false, "name": "Костолом"},
+	]
+	var ids := MatchState.seat_ids(roster.size())
+	var views := {}
+	for i in ids.size():
+		var mine := []
+		for k in roster.size():
+			var d: Dictionary = roster[k]
+			var kind := String(d["kind"])
+			if kind == "human" and k != i:
+				kind = "remote"
+			mine.append({"kind": kind, "local": k == i, "name": String(d["name"])})
+		views[String(ids[i])] = Durak.new_game(777001, "remote", String(ids[i]), "Соперник",
+			String(roster[i]["name"]), mine)
+
+	var lead: Dictionary = views[String(ids[0])]
+	var acts := 0
+	var guard := 0
+	while not bool(lead["over"]) and guard < 400:
+		guard += 1
+		var seat := Durak.actor(lead)
+		if seat == "":
+			break
+		var forced := Durak.forced_action(lead, seat)
+		var act := {"act": forced} if forced != "" else Durak.bot_action(lead)
+		if act.is_empty():
+			break
+		var idx: int = int(act.get("hand", -1))
+		for v in views.values():
+			_dapply(v, seat, String(act["act"]), idx)
+		acts += 1
+
+	var same := true
+	for id in ids:
+		var v: Dictionary = views[String(id)]
+		if _dtable(v) != _dtable(lead) or String(v["attacker"]) != String(lead["attacker"]):
+			same = false
+		for sid in ids:
+			if _dhand(v, String(sid)) != _dhand(lead, String(sid)):
+				same = false
+	check(same and acts > 10, "дуракуб втроём: три взгляда совпали после %d действий" % acts,
+		"руки %d/%d/%d | колода=%d" % [Durak.hand_of(lead, "p").size(),
+			Durak.hand_of(lead, "e").size(), Durak.hand_of(lead, "c").size(), lead["talon"].size()])
