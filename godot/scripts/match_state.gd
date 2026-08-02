@@ -182,6 +182,11 @@ static func replay(mode_key: String, seed_value: int, opponent: String, my_seat:
 	# состав обязателен, если игроков больше двух: иначе в партии не будет сидений
 	# «c» и «d», и ходы из журнала просто некому применить
 	var st := new_match(mode_key, seed_value, opponent, my_seat, foe_name, my_name, picked, roster)
+	# Живая партия проходит через битву за первый ход, а она забирает броски из
+	# того же генератора и заново раздаёт раунд (`apply_duel` обнуляет round,
+	# историю и журнал). Без этого шага восстановленная по журналу партия — другая
+	# партия: другая раздача, другой первый ходящий, другая компенсация.
+	apply_duel(st, String(roll_duel(st)["winner"]))
 	for entry in log:
 		var seat := String(entry[0])
 		# ход мог прийти в конце раунда: доигрываем поток так же, как в живой игре
@@ -284,6 +289,10 @@ static func new_round(state: Dictionary) -> void:
 			var d: Array = state["players"][seat]["deck"]
 			state["players"][seat]["deck"] = shuffled(state["rng"], extra) + d
 	for seat in state["order"]:
+		if is_out(state, String(seat)):
+			# выбывшему ни руки, ни колоды: он смотрит партию со стороны
+			state["players"][seat]["hand"] = []
+			continue
 		var pl: Dictionary = state["players"][seat]
 		while pl["hand"].size() < HAND_SIZE and not pl["deck"].is_empty():
 			pl["hand"].append(pl["deck"].pop_back())
@@ -307,6 +316,8 @@ static func new_round(state: Dictionary) -> void:
 		var start := order.find(String(state["turn"]))
 		for k in n:
 			var seat := String(order[(start + k) % n])
+			if is_out(state, seat):
+				continue     # мёртвый не ходит, значит и компенсировать нечего
 			var komi := int(round(float(komi_now) * float(n - 1 - k) / float(n - 1)))
 			if komi == 0:
 				continue

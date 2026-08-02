@@ -42,7 +42,7 @@ static func new_game(seed_value: int, opponent: String, my_seat: String = "p",
 		"order": order, "players": players,
 		"seats": MatchState.make_roster_seats(roster) if roster.size() >= 2 			else MatchState.make_seats(opponent, my_seat, foe_name, my_name),
 		"talon": [], "discard": 0, "trump": 0,
-		"table": [], "attacker": "p", "max_att": MAX_TABLE,
+		"table": [], "attacker": "p", "max_att": MAX_TABLE, "went_out": [], "passed": [],
 		"phase": "attack", "shown_to": "", "over": false, "outcome": {},
 	}
 	state["rng"] = MatchState.make_rng(seed_value)
@@ -141,18 +141,49 @@ static func other_seat(state: Dictionary, seat: String) -> String:
 static func hand_of(state: Dictionary, seat: String) -> Array:
 	return state["players"][seat]["hand"]
 
-## Кто сейчас действует: в фазе атаки — атакующий, в защите — защищающийся.
+## Кто сейчас действует: в фазе атаки — тот, чья очередь подкидывать, в защите —
+## защищающийся.
 static func actor(state: Dictionary) -> String:
 	if String(state["phase"]) == "attack":
-		return String(state["attacker"])
+		return thrower_of(state)
 	if String(state["phase"]) == "defend":
 		return defender_of(state, String(state["attacker"]))
 	return ""
+
+## Чья очередь подкидывать.
+##
+## Первую атаку кона кладёт только атакующий. Дальше подкинуть может любой, кроме
+## защитника, — это правило было записано в `attack` и в тесте, но до экрана не
+## доходило: он спрашивал только атакующего, и втроём-вчетвером игра выглядела
+## как «двое играют, остальные смотрят». Опрашиваем по кругу от атакующего,
+## пропуская защитника, вышедших и тех, кто в этом коне уже спасовал.
+## `strict` — только тот, кому реально есть чем подкинуть. Без него, когда
+## подкидывать некому, возвращается атакующий: он и закроет кон «Бито», иначе
+## `actor` вернул бы пустоту и поток встал бы посреди кона.
+static func thrower_of(state: Dictionary, strict: bool = false) -> String:
+	var attacker := String(state["attacker"])
+	if state["table"].is_empty():
+		return attacker
+	var def := defender_of(state, attacker)
+	var order: Array = state["order"]
+	var n := order.size()
+	var start := order.find(attacker)
+	var passed: Array = state.get("passed", [])
+	for k in n:
+		var seat := String(order[(start + k) % n])
+		if seat == def or passed.has(seat) or hand_of(state, seat).is_empty():
+			continue
+		# у кого нет подходящего значения — тот и не в очереди
+		for die in hand_of(state, seat):
+			if can_throw(state, die):
+				return seat
+	return "" if strict else attacker
 
 # --------------------------------------------------------------------- кон
 
 static func start_bout(state: Dictionary) -> void:
 	state["table"] = []
+	state["passed"] = []
 	# вышедший не может атаковать: право уходит следующему с кубами
 	if hand_of(state, String(state["attacker"])).is_empty():
 		state["attacker"] = next_with_dice(state, String(state["attacker"]))
@@ -175,6 +206,12 @@ static func refill_hands(state: Dictionary) -> void:
 
 ## Партия кончается, когда колода пуста и с кубами остался один. Он и дуракуб.
 static func check_end(state: Dictionary) -> bool:
+	# запоминаем порядок выхода: без него «кто вышел первым» спрашивали у соседа
+	# по кругу, и на троих-четверых фраза называла не того в 38-66% партий
+	if state["talon"].is_empty():
+		for seat in state["order"]:
+			if hand_of(state, String(seat)).is_empty() and not state["went_out"].has(String(seat)):
+				state["went_out"].append(String(seat))
 	if not state["talon"].is_empty():
 		return false
 	var with_dice := []
@@ -193,6 +230,7 @@ static func check_end(state: Dictionary) -> bool:
 	return true
 
 static func bout_beaten(state: Dictionary) -> void:
+	state["passed"] = []
 	state["discard"] = int(state["discard"]) + state["table"].size() * 2
 	state["table"] = []
 	refill_hands(state)
@@ -206,9 +244,14 @@ static func bout_taken(state: Dictionary, taker: String) -> void:
 		hand.append(pair["a"])
 		if pair["d"] != null:
 			hand.append(pair["d"])
+	state["passed"] = []
 	state["table"] = []
 	refill_hands(state)
-	# взял стол — атакует тот же
+	# Взявший кон пропускает: право атаки уходит следующему за ним. На двоих это
+	# прежнее «атакует тот же», а на троих-четверых снимает залипание пары —
+	# остальные простаивали до двадцати конов подряд.
+	if state["order"].size() > 2:
+		state["attacker"] = next_with_dice(state, taker)
 	start_bout(state)
 
 # ------------------------------------------------------------------ действия
@@ -236,6 +279,9 @@ static func attack(state: Dictionary, seat: String, hand_idx: int) -> Dictionary
 		return {}
 	hand.remove_at(hand_idx)
 	state["table"].append({"a": die, "d": null})
+	# новое значение на столе — круг подкидывания открывается заново: тот, кто
+	# спасовал раньше, мог не иметь чем подкинуть именно тогда
+	state["passed"] = []
 	state["phase"] = "defend"
 	return {"act": "attack", "seat": seat, "die": die, "first": state["table"].size() == 1}
 
@@ -257,11 +303,20 @@ static func defend(state: Dictionary, seat: String, hand_idx: int) -> Dictionary
 	state["phase"] = "attack"
 	return {"act": "defend", "seat": seat, "die": die, "against": att}
 
+## «Бито» от подкидывающего означает «мне добавить нечего». Кон закрывается,
+## только когда так сказали все, кто мог подкинуть.
 static func bito(state: Dictionary, seat: String) -> Dictionary:
-	if String(state["phase"]) != "attack" or seat != String(state["attacker"]):
+	if String(state["phase"]) != "attack" or seat != thrower_of(state):
 		return {}
 	if state["table"].is_empty() or undefended_idx(state) >= 0:
 		return {}
+	var passed: Array = state["passed"]
+	if not passed.has(seat):
+		passed.append(seat)
+	var next_thrower := thrower_of(state, true)
+	if next_thrower != "":
+		# слово переходит следующему — кон ещё живой
+		return {"act": "pass", "seat": seat, "next": next_thrower}
 	var n: int = state["table"].size()
 	bout_beaten(state)
 	return {"act": "bito", "seat": seat, "pairs": n}

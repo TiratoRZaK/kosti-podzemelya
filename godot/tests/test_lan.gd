@@ -259,6 +259,10 @@ func _board(st: Dictionary) -> String:
 func resync_case() -> void:
 	var seed_value := 24680
 	var host := MatchState.new_match("classic", seed_value, "remote", "p")
+	# живая партия всегда проходит битву за первый ход — она забирает броски из
+	# того же генератора и заново раздаёт раунд. `replay` делает то же самое,
+	# поэтому и оригинал в тесте обязан начинаться с неё
+	MatchState.apply_duel(host, String(MatchState.roll_duel(host)["winner"]))
 	var rng := MatchState.make_rng(99)
 	var played := 0
 	for step in 9:
@@ -364,6 +368,8 @@ func party_resync_case() -> void:
 			"name": String(roster[i]["name"])})
 	var host := MatchState.new_match("classic", seed_value, "remote", "p", "Соперник",
 		"Хозяин", [], host_roster)
+	# как и в живой партии, начинаем с битвы за первый ход
+	MatchState.apply_duel(host, String(MatchState.roll_duel(host)["winner"]))
 	var rng := MatchState.make_rng(555)
 	for step in 10:
 		var seat := String(host["turn"])

@@ -21,7 +21,9 @@ var opponent := "bot"            # bot | human (хотсит) | remote (по с�
 var my_seat := "p"               # своё сиденье: у клиента по сети — второе
 var foe_player := "Соперник"     # имя соперника, приходит по сети при знакомстве
 var lan: Lan
-var foe_left := false            # соперник вышел сам — гасит «СВЯЗЬ ПОТЕРЯНА» вдогонку
+var foe_left := false          # соперник вышел сам — гасит «СВЯЗЬ ПОТЕРЯНА» вдогонку
+var reconnecting := false      # идёт цикл возврата в партию
+var _announced_out := {}       # о ком уже объявили «выбывает»
 var lobby_layer: Control
 var lobby_box: VBoxContainer
 var selected := -1
@@ -122,7 +124,6 @@ var roster_for_run: Array = [] # состав, с которым запущен�
 var duel_layer: Control
 var duel_row: HBoxContainer
 var duel_note: Label
-var duel_count: Label
 var duel_hand: Control          # площадка, откуда игрок бросает свой куб
 var duel_input: Control         # прозрачный слой поверх битвы: ловит свайп
 var event_layer: Control        # экран предложения между раундами
@@ -310,11 +311,15 @@ func _apply_safe_area() -> void:
 	hand_px = 62 if compact else HAND_PX
 	if hand_row != null:
 		hand_row.custom_minimum_size.y = hand_px
+	if hist_strip != null:
+		hist_strip.custom_minimum_size.y = _touch(40.0)
 	if card_scroll != null:
 		# Резервы держим скупее, чем раньше: всё, что забрано впустую, потом
 		# отбирает `_fit_battle` масштабом у всего экрана разом — а он уменьшает и
 		# кнопки, и таблетки ленты ниже 40 px, за которые велась отдельная борьба.
-		card_scroll.custom_minimum_size.y = 78 if compact else 96
+		# два ряда жетонов плюс заголовок — 122; при 96 нижний ряд срезался ровно
+		# посередине, и видимая сумма не сходилась с итогом хода
+		card_scroll.custom_minimum_size.y = 96 if compact else 122
 	_fit_battle()
 	for box in [battle_root, durak_root]:
 		if box == null:
@@ -512,7 +517,7 @@ func _build_ui() -> void:
 	# лента ходов: таблетки с номером и итогом, тап раскрывает нужную карточку
 	hist_strip = HBoxContainer.new()
 	hist_strip.add_theme_constant_override("separation", 6)
-	hist_strip.custom_minimum_size.y = 40
+	hist_strip.custom_minimum_size.y = 40   # пересчитывается в _apply_safe_area
 	var strip_scroll := ScrollContainer.new()
 	strip_scroll.custom_minimum_size.y = 40
 	strip_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
@@ -527,7 +532,7 @@ func _build_ui() -> void:
 	card_box = VBoxContainer.new()
 	card_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	card_scroll = ScrollContainer.new()
-	card_scroll.custom_minimum_size.y = 96
+	card_scroll.custom_minimum_size.y = 122
 	card_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	card_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	card_scroll.add_child(card_box)
@@ -578,6 +583,9 @@ func _build_ui() -> void:
 	# панели ещё нулевой, и её уносило от центра экрана
 	var bcenter := CenterContainer.new()
 	bcenter.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# Баннер центрируется по экрану, а доска занимает верхние две трети — «РАУНД 2»
+	# ложился ровно на её нижний ряд и полторы секунды прятал кубы. Поднимаем.
+	bcenter.offset_bottom = -180
 	bcenter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bcenter.z_index = 119
 	bcenter.add_child(bpanel)
@@ -661,7 +669,7 @@ func _foe_row(seat: String, compact: bool) -> Control:
 		Palette.name_of(int(state["order"].find(seat))), dead)
 	left.add_child(nm)
 	if dead:
-		v.modulate.a = 0.5
+		v.modulate.a = 0.85
 	left.add_child(_grow())
 	var kind := String(state["cfg"]["kind"])
 	var mid := CenterContainer.new()
@@ -874,11 +882,15 @@ func _d_die(die: Dictionary, px: int, trump: int, dim: bool = false, tilt: float
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = face["bg"]
 	sb.set_corner_radius_all(int(px * 0.22))
-	sb.border_color = Palette.GOLD if is_trump else face["edge"]
+	# Козырь обводим золотом, но бубновая грань сама золотая (1.12:1 — рамки не
+	# видно вовсе, а козырь бубён выпадает в каждой четвёртой партии). На светлых
+	# гранях берём тёмную обводку.
+	var light_face: bool = face["bg"].get_luminance() > 0.45
+	sb.border_color = (Palette.BONE_INK if light_face else Palette.GOLD) if is_trump else face["edge"]
 	sb.set_border_width_all(3 if is_trump else 2)
 	slot.add_theme_stylebox_override("panel", sb)
 	if dim:
-		slot.modulate = Color(1, 1, 1, 0.4)
+		slot.modulate = Color(1, 1, 1, 0.62)
 	if tilt != 0.0:
 		slot.pivot_offset = Vector2(px, px) * 0.5
 		slot.rotation = deg_to_rad(tilt)
@@ -1106,7 +1118,12 @@ func _d_valid(me: String) -> Array:
 	if String(d_state["phase"]) == "attack":
 		if d_state["table"].size() >= int(d_state["max_att"]):
 			return out
-		if Durak.hand_of(d_state, MatchState.other_seat(d_state, me)).is_empty():
+		# защитник, а не сосед по кругу: `other_seat` берёт следующее сиденье как
+		# есть, `defender_of` пропускает вышедших. Ту же ошибку уже чинили в
+		# `Durak.forced_action`, в интерфейсе она осталась — и втроём в 13% партий,
+		# вчетвером в 22% экран вставал намертво: ни одного доступного куба, ни
+		# кнопки «Бито», ни принудительного действия
+		if Durak.hand_of(d_state, Durak.defender_of(d_state, String(d_state["attacker"]))).is_empty():
 			return out
 		for i in hand.size():
 			if Durak.can_throw(d_state, hand[i]):
@@ -1189,6 +1206,9 @@ func _start_durak(seed_value: int = -1) -> void:
 	state = {}
 	d_frozen = []
 	var sd := seed_value if seed_value >= 0 else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
+	# по сети состав задаёт стол, а не то, что осталось от прошлой местной партии
+	if opponent == "remote" and (lan == null or lan.table_seats <= 2):
+		roster_for_run = []
 	var party: Array = roster_for_run if not roster_for_run.is_empty() else []
 	if seed_value < 0 and opponent == "roster":
 		party = _roster_for_match()
@@ -1378,6 +1398,18 @@ func _d_bito(seat: String, broadcast: bool = true) -> void:
 	if broadcast:
 		_d_send(seat, "bito")
 	busy = true
+	# «Бито» от подкидывающего — это ещё не конец кона: пока есть кому добавить,
+	# слово идёт по кругу, и стол остаётся на месте
+	var passed_on: bool = String(res.get("act", "")) == "pass"
+	if passed_on:
+		d_frozen = []
+		d_toast("%s пасует" % MatchState.seat_name(d_state, seat), seat != _d_viewer())
+		_d_refresh()
+		await get_tree().create_timer(0.4).timeout
+		if d_state.is_empty() or not in_durak:
+			return
+		await _durak_next(0.6)
+		return
 	d_toast("Бито")
 	_d_refresh()
 	await get_tree().create_timer(0.65).timeout
@@ -1431,17 +1463,19 @@ func _d_finish() -> void:
 	var title := "НИЧЬЯ"
 	var text := "Оба вышли одновременно — дуракубов сегодня нет."
 	if loser != "":
-		var winner := MatchState.other_seat(d_state, loser)
+		# первый вышедший, а не сосед по кругу
+		var went: Array = d_state.get("went_out", [])
+		var winner := String(went[0]) if not went.is_empty() 			else MatchState.other_seat(d_state, loser)
 		if _solo(d_state) and loser == mine:
 			# та самая фраза, из-за которой в это вообще играют
 			title = "ТЫ ДУРАКУБ!"
-			text = "Ты остался с кубами. Позор на все подземелья."
-		elif _solo(d_state):
+			text = "Кубы остались у тебя. Позор на все подземелья."
+		elif _solo(d_state) and d_state["order"].size() == 2:
 			title = "ПОБЕДА!"
 			text = "Соперник остался с кубами — дуракуб он."
 		else:
 			title = MatchState.seat_name(d_state, loser).to_upper() + " — ДУРАКУБ!"
-			text = "%s вышел первым, а %s остался с кубами." % [
+			text = "%s вышел первым, кубы остались у игрока %s." % [
 				MatchState.seat_name(d_state, winner), MatchState.seat_name(d_state, loser)]
 	_show_result(title, text, "Ещё раз", _start_durak)
 
@@ -1496,6 +1530,9 @@ func _build_menu() -> Control:
 		_show_lobby()
 	))
 	kind_box.add_child(_kind_button("По сети", "пока недоступно", Callable(), true))
+	var rules_btn := _button("Как играть", true)
+	rules_btn.pressed.connect(_show_rules)
+	kind_box.add_child(rules_btn)
 	var name_btn := _button("Сменить имя", true)
 	name_btn.pressed.connect(func(): _show_name_screen(false))
 	kind_box.add_child(name_btn)
@@ -1759,12 +1796,8 @@ func _build_duel() -> Control:
 	duel_row.add_theme_constant_override("separation", 18)
 	v.add_child(duel_row)
 	# Стаканчики и отсчёт «три-два-один» убраны по просьбе владельца: бросил —
-	# сразу видишь, что выпало. Прятать значения было нужно только затем, чтобы
-	# их вскрывали разом, а раз вскрытия нет — и прятать нечего.
-	duel_count = _label("", 40, Palette.GOLD_LIGHT, Palette.FONT_TITLE)
-	duel_count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	duel_count.custom_minimum_size.y = 46
-	v.add_child(duel_count)
+	# сразу видишь, что выпало. Метка отсчёта тоже убрана — пустая, она держала
+	# 46 px плюс два отступа и разводила гнёзда с кубом в руке на 107 px.
 	# Место, откуда игрок бросает свой куб. Держим его отдельным узлом внизу: куб
 	# на время броска уходит из ряда и летит поверх всего слоя.
 	duel_hand = Control.new()
@@ -1790,6 +1823,10 @@ func _start_duel(after: Callable) -> void:
 	if duel_layer == null:
 		duel_layer = _build_duel()
 		add_child(duel_layer)
+	# Повторный вход недопустим: состояние броска лежит в полях, вторая копия
+	# затрёт первой куб и дважды подпишется на ввод.
+	if duel_layer.visible:
+		return
 	var res := MatchState.roll_duel(state)
 	# снимкам боевых экранов битва не нужна: она длится несколько секунд и все
 	# кадры уходили бы в неё. Для самой битвы есть отдельные сценарии.
@@ -1800,8 +1837,15 @@ func _start_duel(after: Callable) -> void:
 			after.call()
 		return
 	duel_layer.visible = true
-	duel_count.text = ""
+	# Битва — самый длинный await боевого потока: свайпа можно ждать до восьми
+	# секунд. За это время партия могла смениться (обрыв связи, возврат в меню,
+	# присланная заново партия), и `apply_duel` затёрла бы уже другое состояние —
+	# вместе с журналом ходов, по которому её восстанавливают.
+	var tok := flow_token
 	await _play_duel(res)
+	if tok != flow_token or state.is_empty():
+		duel_layer.visible = false
+		return
 	MatchState.apply_duel(state, String(res["winner"]))
 	duel_layer.visible = false
 	_refresh()
@@ -1930,8 +1974,13 @@ func _await_throw(value: int, idx: int, slot: Control = null) -> float:
 	# куба — одна система, и он точно идёт за пальцем
 	duel_input.add_child(d)
 	await get_tree().process_frame
-	var home: Vector2 = duel_hand.global_position - duel_input.global_position \
-		+ Vector2(duel_hand.size.x * 0.5 - 32.0, duel_hand.size.y - 76.0)
+	# Куб лежит ПОД своим гнездом, а не по центру экрана: иначе непонятно, куда он
+	# полетит — гнездо «ТЫ» слева, а куб посередине.
+	var mid_x: float = duel_hand.global_position.x + duel_hand.size.x * 0.5 - 32.0
+	if slot != null and slot.size.x > 1.0:
+		mid_x = slot.global_position.x + slot.size.x * 0.5 - 32.0
+	var home: Vector2 = Vector2(mid_x,
+		duel_hand.global_position.y + duel_hand.size.y - 76.0) - duel_input.global_position
 	d.position = home
 	d.pivot_offset = d.size * 0.5
 	# лёгкое «дыхание»: куб выглядит взятым в руку, а не забытым на столе
@@ -2069,6 +2118,9 @@ func _fly_die(value: int, idx: int, slot: Control, target: DieView, power: float
 	await get_tree().create_timer(dur).timeout
 	if is_instance_valid(d):
 		d.queue_free()
+	# ряд битвы мог пересобраться (переброс, новая партия) — тогда лететь некуда
+	if not is_instance_valid(target):
+		return
 	target.visible = true
 	target.play_place()
 	_shake(3.0, 0.12)
@@ -2228,7 +2280,7 @@ func _build_name_screen() -> Control:
 	var t := _label("КАК ТЕБЯ ЗВАТЬ?", 20, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(t)
-	var sub := _label("Имя будет стоять в игре и увидят соперники по Wi-Fi.", 11, Palette.MUTED)
+	var sub := _label("Имя будет стоять в игре, и его увидят соперники по Wi-Fi.", 11, Palette.MUTED)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	sub.custom_minimum_size.x = 290
@@ -2321,7 +2373,7 @@ func _build_veil() -> Control:
 	var sub := _label("Передай устройство и не подглядывай.", 12, Palette.MUTED)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(sub)
-	var b := _button("Я готов")
+	var b := _button("Готово — мой ход")
 	b.pressed.connect(_hide_veil)
 	v.add_child(b)
 	return layer
@@ -2337,7 +2389,7 @@ const ABILITY_ICONS := {
 	"warlock": "res://assets/icons/icon_orb.png",
 }
 const ABILITY_TEXT := {
-	"shield": "Два хода соперника его нельзя съесть — даже колдуном и челюстью.",
+	"shield": "Два чужих хода его нельзя съесть — даже колдуном и челюстью. Втроём это два хода двух разных соперников.",
 	"spikes": "Скрыт от соперника. Съевший теряет 10 очков, но куб всё равно съеден.",
 	"mine": "Скрыта. Уничтожает себя и атакующего, а ход сгорает целиком: ни ренты, ни комбо за него не начислят.",
 	"jaw": "При выставлении съедает вражеский куб справа — любого значения, хоть шестёрку. В правом столбце бессильна.",
@@ -2708,8 +2760,26 @@ func _on_lan_party(mode: String, seed_value: int, roster: Array, seat_id: String
 
 func _on_lan_connected() -> void:
 	foe_left = false
+	reconnecting = false
 	lan.send_hello()          # обе стороны сразу представляются
 	if lan.is_host:
+		# Партия уже идёт — значит это вернувшийся, а не новый игрок: отдаём ему
+		# партию целиком (сид + журнал), он соберёт её у себя. Раньше здесь
+		# безусловно открывался экран режимов — поверх идущей игры, и хост мог
+		# случайно начать вторую партию вместо того, чтобы вернуть соперника.
+		if not state.is_empty() and not bool(state.get("over", false)):
+			if lan.table_seats > 2:
+				var pid := _last_peer_id()
+				lan.send_party_resync(pid, String(state["mode"]), int(state["seed"]),
+					roster_for_run, _seat_for_peer(pid), state["log"])
+			else:
+				lan.send_resync(String(state["mode"]), int(state["seed"]), state["log"])
+			toast("%s вернулся в партию" % foe_player, true)
+			return
+		if not d_state.is_empty() and not bool(d_state.get("over", false)):
+			# Дуракуб журнала не ведёт — партию не восстановить, честно скажем
+			toast("%s вернулся, но кон Дуракуба уже не собрать" % foe_player, true)
+			return
 		# хост выбирает режим; клиент ждёт объявления партии
 		lobby_layer.visible = false
 		menu_layer.visible = true
@@ -2719,7 +2789,9 @@ func _on_lan_connected() -> void:
 		_show_modes()
 		menu_note.text = "%s подключился — выбери режим." % foe_player
 	else:
-		_lobby_message("Подключились! Ждём, пока хост выберет режим…", false)
+		# у клиента партия могла остаться на экране — тогда ждём resync молча
+		if state.is_empty() and d_state.is_empty():
+			_lobby_message("Подключились! Ждём, пока хост выберет режим…", false)
 
 func _on_lan_lost() -> void:
 	# соперник вышел сам — «СОПЕРНИК ВЫШЕЛ» уже показан, обрыв связи вдогонку
@@ -2745,14 +2817,23 @@ func _on_lan_lost() -> void:
 ## Клиент возвращается к хосту: несколько попыток с паузой. Хост, увидев его,
 ## пришлёт партию заново (send_resync), и игра продолжится с того же места.
 func _try_reconnect() -> void:
+	# один цикл за раз: каждая неудачная попытка приводит к `connection_failed`, и
+	# без флага она запускала ещё один цикл — за полминуты их набиралось восемь,
+	# а `join()` начинается с `stop()`, поэтому они рвали связь друг другу
+	if reconnecting:
+		return
+	reconnecting = true
 	var attempts := 8
 	for i in attempts:
 		if lan == null or lan.connected:
+			reconnecting = false
 			return
 		await get_tree().create_timer(2.0).timeout
 		if lan == null or lan.connected or state.is_empty() and d_state.is_empty():
+			reconnecting = false
 			return
 		lan.join(lan.last_address)
+	reconnecting = false
 	if lan != null and not lan.connected:
 		_show_result("СВЯЗЬ ПОТЕРЯНА", "Вернуться не удалось. Соперник ушёл или сеть пропала.",
 			"В меню", _show_menu)
@@ -2761,6 +2842,11 @@ func _on_lan_left() -> void:
 	# сами уже вышли (встречное «вышел») или партия не сетевая — просто прибрать
 	if not lan.connected or opponent != "remote":
 		lan.stop.call_deferred()
+		return
+	# За столом на троих-четверых уход одного — не конец партии: сервер остаётся
+	# поднятым для остальных, гасим его только когда ушёл последний.
+	if lan.is_host and not lan.lobby.is_empty():
+		toast("Игрок вышел из партии", true)
 		return
 	foe_left = true
 	_new_flow()
@@ -2777,6 +2863,12 @@ func _on_lan_match_started(mode: String, seed_value: int) -> void:
 	# клиент собирает ту же партию из присланного сида
 	lobby_layer.visible = false
 	opponent = "remote"
+	# Состав от прошлой МЕСТНОЙ партии сюда попадать не должен: он чистится только
+	# в `_start_mode`, которого у клиента не было. Иначе клиент собирал стол на
+	# четверых против стола хоста на двоих — другая колода, другая компенсация,
+	# и он ждал хода за сиденье, которого у хоста нет.
+	if lan == null or lan.table_seats <= 2:
+		roster_for_run = []
 	if mode == "durak":
 		await _start_durak(seed_value)
 		return
@@ -2855,7 +2947,7 @@ func _events_phase() -> void:
 			if not pick.is_empty():
 				_apply_event(key, ev, pick)
 				toast("%s: %s" % [MatchState.seat_name(state, key),
-					String(Events.INFO[String(ev["kind"])]["title"]).to_lower()], true)
+					_event_done_text(String(ev["kind"]))], true)
 				await get_tree().create_timer(0.8).timeout
 		if tok != flow_token or state.is_empty():
 			return
@@ -2931,12 +3023,12 @@ func _event_draw(seat: String, ev: Dictionary, step := "main", ctx := {}) -> voi
 			Palette.name_of(int(state["order"].find(seat))))
 		who.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		event_box.add_child(who)
-	var d := _label(String(info["text"]), 12, Palette.TEXT)
+	var d := _label(String(info["text"]), 11, Palette.MUTED)
 	d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	d.custom_minimum_size.x = 300
 	event_box.add_child(d)
-	var price := _label("Цена %d · у тебя %d" % [cost, money], 13,
+	var price := _label("Цена %d · в казне %d" % [cost, money], 13,
 		Palette.GOLD_LIGHT if money >= cost else Palette.NEG, Palette.FONT_UI)
 	price.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	event_box.add_child(price)
@@ -2953,13 +3045,13 @@ func _event_draw(seat: String, ev: Dictionary, step := "main", ctx := {}) -> voi
 			"swap": _event_swap(seat, ev, step, ctx)
 
 	if step == "main":
-		var ward := _button("Оберег за %d — закрыть свою руку" % Events.WARD_COST, true)
+		var ward := _button("🛡 Оберег за %d — один раз спасёт руку" % Events.WARD_COST)
 		ward.disabled = not Events.can_afford(state, seat, Events.WARD_COST) \
 			or Events.warded(state, seat)
 		ward.modulate.a = 1.0 if not ward.disabled else 0.5
 		ward.pressed.connect(func():
 			_apply_event(seat, ev, {"act": "ward"})
-			toast("Оберег куплен: до следующего ивента твою руку не тронут")
+			_event_receipt(seat, "ward", "Оберег куплен: чужой соглядатай и меняла уйдут ни с чем")
 			event_done = true
 		)
 		event_box.add_child(ward)
@@ -2989,7 +3081,7 @@ func _event_buy(seat: String, ev: Dictionary) -> void:
 		d.pressed.connect(func(_x):
 			var res := _apply_event(seat, ev, {"act": "buy", "idx": i})
 			if bool(res.get("ok", false)):
-				toast("Куплен куб — он уже в руке")
+				_event_receipt(seat, "buy", "Куб куплен и уже в руке")
 			event_done = true
 		)
 		row.add_child(d)
@@ -3022,7 +3114,7 @@ func _event_reroll(seat: String, ev: Dictionary, step: String, ctx: Dictionary) 
 		b.custom_minimum_size = Vector2(42, 42)
 		b.pressed.connect(func():
 			_apply_event(seat, ev, {"act": "reroll", "idx": int(ctx["idx"]), "value": v})
-			toast("Куб сточен до %d" % v)
+			_event_receipt(seat, "reroll", "Куб сточен до %d" % v)
 			event_done = true
 		)
 		vals.add_child(b)
@@ -3039,7 +3131,8 @@ func _event_spy(seat: String, ev: Dictionary, step: String, ctx: Dictionary) -> 
 		return
 	var res: Dictionary = ctx["res"]
 	if bool(res.get("blocked", false)):
-		event_box.add_child(_event_hint("Рука закрыта оберегом — ничего не видно."))
+		event_box.add_child(_event_hint("Рука закрыта оберегом — ничего не видно. %d очков ушли впустую."
+			% Events.cost_of("spy")))
 	else:
 		event_box.add_child(_event_hint("Рука игрока %s:"
 			% MatchState.seat_name(state, String(ctx["target"]))))
@@ -3075,7 +3168,8 @@ func _event_swap(seat: String, ev: Dictionary, step: String, ctx: Dictionary) ->
 		return
 	var target := String(ctx["target"])
 	if Events.warded(state, target):
-		event_box.add_child(_event_hint("Рука закрыта оберегом — меняться не с чем."))
+		event_box.add_child(_event_hint("Рука закрыта оберегом — меняться не с чем. %d очков уйдут впустую."
+			% Events.cost_of("swap")))
 		var back := _button("Ясно")
 		back.pressed.connect(func():
 			_apply_event(seat, ev, {"act": "swap", "idx": int(ctx["mine"]),
@@ -3089,12 +3183,26 @@ func _event_swap(seat: String, ev: Dictionary, step: String, ctx: Dictionary) ->
 		func(i: int):
 			_apply_event(seat, ev, {"act": "swap", "idx": int(ctx["mine"]),
 				"target": target, "their": i})
-			toast("Обмен состоялся")
+			_event_receipt(seat, "swap", "Обмен состоялся")
 			event_done = true
 	))
 
+## Чек за покупку: сколько списали и сколько осталось. Без него ни одна цифра на
+## экране не шевелилась, и было непонятно, заплатил ты или нет.
+func _event_receipt(seat: String, kind: String, what: String) -> void:
+	var cost := Events.WARD_COST if kind == "ward" else Events.cost_of(kind)
+	toast("%s · −%d, в казне %d" % [what, cost, Events.funds(state, seat)])
+
+func _event_done_text(kind: String) -> String:
+	match kind:
+		"buy": return "купил куб у торговца"
+		"reroll": return "сточил свой куб"
+		"spy": return "подсмотрел чью-то руку"
+		"swap": return "обменялся кубом"
+	return "воспользовался ивентом"
+
 func _event_hint(text: String) -> Control:
-	var l := _label(text, 12, Palette.MUTED)
+	var l := _label(text, 13, Palette.TEXT)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.custom_minimum_size.x = 300
@@ -3130,10 +3238,16 @@ func _build_rules() -> Control:
 	layer.add_child(center)
 	var panel := _panel(Palette.PANEL_2)
 	center.add_child(panel)
+	# Кнопка выхода лежит РЯДОМ с прокруткой, а не внутри неё: правила длиной в
+	# два экрана, и «Понятно» приходилось искать, докручивая до самого низа.
+	var shell := VBoxContainer.new()
+	shell.add_theme_constant_override("separation", 8)
+	panel.add_child(shell)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(330, 640)
+	scroll.custom_minimum_size = Vector2(330, 580)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_hide_scrollbar(scroll)
-	panel.add_child(scroll)
+	shell.add_child(scroll)
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 8)
 	v.custom_minimum_size.x = 314
@@ -3149,7 +3263,7 @@ func _build_rules() -> Control:
 	var rb := rules_battle_box
 	rb.add_child(_rules_head("Ход"))
 	rb.add_child(_rules_line("Выбери куб в руке и поставь на пустую клетку или съешь вражеский."))
-	rb.add_child(_rules_line("Базовый куб ест куб со значением не больше своего: шестёрка ест всех, единица — только единицу."))
+	rb.add_child(_rules_line("Съесть чужой куб может любой твой куб, если его значение не меньше: шестёрка ест всех, единица — только единицу."))
 	rb.add_child(_rules_head("Очки за ход"))
 	rb.add_child(_rules_line("Съел — значение съеденного куба."))
 	rb.add_child(_rules_line("Кубы на поле — сумма значений всех твоих кубов, начисляется каждый ход. Это главный источник очков: из него приходит около трёх четвертей дохода."))
@@ -3157,9 +3271,9 @@ func _build_rules() -> Control:
 	rb.add_child(_rules_line("Лесенка — подряд идущие значения: три +10, четыре +20, пять +35. Годятся и кубы из пары: 3, 3, 4, 5 — это лесенка."))
 	rb.add_child(_rules_line("Считается только ЛУЧШАЯ комбинация, а не все сразу: 4, 4, 4, 5, 6 дают сет +15, а не сет с лесенкой."))
 	rb.add_child(_rules_line("Комбо начисляется каждый ход, пока кубы стоят на поле. Поэтому ранний ход стоит дороже позднего: он успеет принести доход много раз."))
-	rb.add_child(_rules_line("Тот, кто ходит в раунде первым, получает +%d очков" % Rules.FIRST_MOVE_KOMI + ": отвечать выгоднее, чем начинать."))
+	rb.add_child(_rules_line("Тот, кто ходит в раунде первым, получает очки вперёд: отвечать выгоднее, чем начинать. В Классике это +6, на Большой доске +16, а втроём-вчетвером надбавка делится по очереди — последнему не достаётся ничего."))
 	rb.add_child(_rules_head("Режимы"))
-	rb.add_child(_rules_line("Классика и Большая доска — три жизни, жизнь теряет проигравший раунд."))
+	rb.add_child(_rules_line("Классика и Большая доска — три жизни. Вдвоём сердце теряет проигравший раунд, втроём и вчетвером — все, кроме взявшего раунд. Потерял все три — выбыл, остальные доигрывают без тебя."))
 	rb.add_child(_rules_line("Своя колода — три раунда одной колодой, раунд берёт тот, у кого больше очков."))
 	rb.add_child(_rules_line("Гонка — счёт копится между раундами, побеждает первый набравший 500."))
 	rb.add_child(_rules_line("Территория — за каждый ход начисляются удержанные клетки, раунд берёт тот, у кого их больше."))
@@ -3183,13 +3297,13 @@ func _build_rules() -> Control:
 	rd.add_child(_rules_line("Не отбился — «Взять»: весь стол уходит в руку, атакует тот же соперник."))
 	rd.add_child(_rules_line("Атак в коне не больше, чем кубов было в руке защитника, и не больше шести."))
 	rd.add_child(_rules_head("Конец партии"))
-	rd.add_child(_rules_line("После кона руки добираются до шести из колоды, первым добирает атакующий."))
-	rd.add_child(_rules_line("Колода кончилась и кто-то вышел без кубов — партия всё. Остался с кубами — ты дуракуб."))
+	rd.add_child(_rules_line("После кона руки добираются из колоды, первым добирает атакующий. Вдвоём и втроём рука до шести кубов, вчетвером — до пяти: иначе колода раздаётся целиком и прикупа не остаётся."))
+	rd.add_child(_rules_line("Партия идёт, пока колода не кончится и с кубами не останется один — он и дуракуб. Первым атакует тот, у кого младший козырь."))
 	rd.add_child(_rules_line("Способностей и очков здесь нет — только масти, значения и козырь."))
 
 	var b := _button("Понятно")
 	b.pressed.connect(func(): rules_layer.visible = false)
-	v.add_child(b)
+	shell.add_child(b)
 	return layer
 
 func _rules_head(text: String) -> Control:
@@ -3251,9 +3365,19 @@ func _show_menu() -> void:
 	if opponent == "remote" and lan != null and lan.connected:
 		lan.send_leave()
 	_reset_shift()
+	# состав прошлой партии в меню больше не действует: иначе он утекал в
+	# следующую — в том числе в сетевую, где стол задаёт хозяин
+	roster_for_run = []
+	in_durak = false
+	d_state = {}
 	menu_layer.visible = true
+	durak_layer.visible = false
+	battle_root.visible = true
 	veil_layer.visible = false
 	over_layer.visible = false
+	if event_layer != null:
+		event_layer.visible = false
+	event_done = true      # оборвать ожидание ивента, если оно шло
 	menu_note.text = ""
 	_show_kinds()          # меню всегда открывается с выбора вида игры
 	_hide_banner()
@@ -3289,6 +3413,7 @@ func _start_mode(key: String, deck: Array = []) -> void:
 		return
 	var seed_value := draft_seed if not deck.is_empty() else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
 	roster_for_run = _roster_for_match() if opponent == "roster" else []
+	_announced_out = {}
 	if opponent == "remote" and lan != null and lan.is_host and lan.table_seats > 2:
 		# Стол на троих и больше: хозяин раздаёт сиденья по порядку подключения,
 		# свободные места занимают боты, и каждому лично уходит его сиденье.
@@ -3513,14 +3638,25 @@ func _score_table(winner: String) -> Control:
 
 	var grid := VBoxContainer.new()
 	grid.add_theme_constant_override("separation", 4)
+	var head_pad := MarginContainer.new()
+	head_pad.add_theme_constant_override("margin_left", 8)
+	head_pad.add_theme_constant_override("margin_right", 8)
+	grid.add_child(head_pad)
 	var head := HBoxContainer.new()
+	head_pad.add_child(head)
 	head.add_child(_col(_label("ИГРОК", 10, Palette.MUTED), 3))
 	head.add_child(_col(_label("УДЕРЖАНО" if by_count else "ОЧКИ", 10, Palette.MUTED, "", HORIZONTAL_ALIGNMENT_RIGHT), 2))
 	if kind == "lives":
-		head.add_child(_col(_label("♥", 10, Palette.MUTED, "", HORIZONTAL_ALIGNMENT_RIGHT), 1))
+		# рисованное сердце, а не эмодзи: заданный цвет глиф игнорирует и выходит
+		# розовым — на одной панели получалось два разных сердца
+		var head_heart := LifeRow.new()
+		head_heart.setup(1, 1, LifeRow.KIND_HEART, Palette.MUTED)
+		var hw := HBoxContainer.new()
+		hw.alignment = BoxContainer.ALIGNMENT_END
+		hw.add_child(head_heart)
+		head.add_child(_col(hw, 1))
 	elif kind == "bo3":
 		head.add_child(_col(_label("ПОБЕД", 10, Palette.MUTED, "", HORIZONTAL_ALIGNMENT_RIGHT), 1))
-	grid.add_child(head)
 
 	for r in rows:
 		var seat := String(r["seat"])
@@ -3528,7 +3664,7 @@ func _score_table(winner: String) -> Control:
 		var win: bool = seat == winner and winner != ""
 		var line := PanelContainer.new()
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(Palette.GOLD, 0.14) if win else Color(0, 0, 0, 0.22)
+		sb.bg_color = Color(Palette.GOLD, 0.10) if win else Color(0, 0, 0, 0.22)
 		sb.set_corner_radius_all(8)
 		sb.content_margin_left = 8
 		sb.content_margin_right = 8
@@ -3540,9 +3676,15 @@ func _score_table(winner: String) -> Control:
 		line.add_theme_stylebox_override("panel", sb)
 		var row := HBoxContainer.new()
 		line.add_child(row)
-		var who := ("👑 " if win else ("💀 " if dead else "")) + MatchState.seat_name(state, seat)
-		row.add_child(_col(_name_label(who,
-			Palette.name_of(int(state["order"].find(seat))), dead), 3))
+		var who_box := HBoxContainer.new()
+		who_box.add_theme_constant_override("separation", 4)
+		if win or dead:
+			# значок отдельным узлом: внутри `[s]` линия перечёркивала сам череп и
+			# это читалось как сбой отрисовки
+			who_box.add_child(_label("👑" if win else "💀", 12, Palette.GOLD_LIGHT))
+		who_box.add_child(_name_label(MatchState.seat_name(state, seat),
+			Palette.name_of(int(state["order"].find(seat))), dead))
+		row.add_child(_col(who_box, 3))
 		row.add_child(_col(_label(str(int(r["v"])), 15, Palette.GOLD_LIGHT if win else Palette.TEXT,
 			Palette.FONT_UI, HORIZONTAL_ALIGNMENT_RIGHT), 2))
 		if kind == "lives":
@@ -3556,7 +3698,9 @@ func _score_table(winner: String) -> Control:
 			row.add_child(_col(_label(str(int(state["players"][seat]["wins"])), 13,
 				Palette.TEXT, Palette.FONT_UI, HORIZONTAL_ALIGNMENT_RIGHT), 1))
 		if dead:
-			line.modulate.a = 0.55
+			# 0.55 уводило имя кровавого сиденья на 2.3:1, а счёт на 3.7:1 — читать
+			# нельзя. Череп, зачёркивание и пустые сердца и так говорят всё
+			line.modulate.a = 0.85
 		grid.add_child(line)
 	return grid
 
@@ -3573,8 +3717,12 @@ func _refresh() -> void:
 		return
 	var cfg: Dictionary = state["cfg"]
 	var me := viewer()
-	my_name.text = MatchState.seat_name(state, me).to_upper()
-	my_name.add_theme_color_override("font_color", Palette.name_of(int(state["order"].find(me))))
+	var i_am_out: bool = MatchState.is_out(state, me)
+	# Череп рисовался только в строках соперников: выбывший игрок сидел с обычной
+	# панелью и не понимал, почему ход к нему не приходит.
+	my_name.text = ("💀 " if i_am_out else "") + MatchState.seat_name(state, me).to_upper()
+	my_name.add_theme_color_override("font_color",
+		Palette.MUTED if i_am_out else Palette.name_of(int(state["order"].find(me))))
 	var kind := String(cfg["kind"])
 	_roll_score(my_score, me, kind, cfg)
 	my_score.add_theme_color_override("font_color",
@@ -3597,17 +3745,23 @@ func _refresh() -> void:
 			foes.append(seat)
 	for seat in foes:
 		foes_box.add_child(_foe_row(String(seat), foes.size() > 1))
-	my_deck.text = "Колода: %d" % state["players"][me]["deck"].size()
+	# Казна — очки, набранные с начала матча. Раньше её нигде не показывали, и
+	# число в окне ивента («в казне 200») игрок видел впервые в жизни.
+	var purse := Events.funds(state, me)
+	my_deck.text = "Колода: %d · казна %d" % [state["players"][me]["deck"].size(), purse]
 	var turn := String(state["turn"])
 	var move_no: int = mini(int(state["players"][turn]["moves"]) + 1, int(cfg["moves"]))
 	turn_info.text = "РАУНД %d · ХОД %d/%d" % [int(state["round"]), move_no, int(cfg["moves"])]
-	if _solo(state) and turn == me:
+	if i_am_out:
+		turn_who.text = "ТЫ ВЫБЫЛ"
+	elif _solo(state) and turn == me:
 		turn_who.text = "ТВОЙ ХОД"
 	elif _solo(state):
 		turn_who.text = "ХОД СОПЕРНИКА"
 	else:
 		turn_who.text = "ХОД: " + MatchState.seat_name(state, turn).to_upper()
-	turn_who.add_theme_color_override("font_color", Palette.GOLD_LIGHT if turn == me else Palette.NEG)
+	turn_who.add_theme_color_override("font_color",
+		Palette.MUTED if i_am_out else (Palette.GOLD_LIGHT if turn == me else Palette.NEG))
 
 	hint = _find_hint(me) if input_allowed() and String(state["turn"]) == me else {}
 	_rebuild_board(me)
@@ -3962,7 +4116,7 @@ func _round_fanfare(winner: String, detail: String) -> void:
 ## Фразы исхода раунда: всегда говорим, что именно произошло, а не только счёт.
 func _round_phrases(winner: String, detail: String) -> Dictionary:
 	if winner == "":
-		return {"title": "НИЧЬЯ В РАУНДЕ", "text": detail + " — никто не теряет ♥"}
+		return {"title": "НИЧЬЯ В РАУНДЕ", "text": "Никто не теряет сердце"}
 	var mine := _my_view(state)
 	var title := ""
 	if _solo(state):
@@ -3978,14 +4132,18 @@ func _round_phrases(winner: String, detail: String) -> Dictionary:
 		# про одного проигравшего описывала правило неверно, а `other_seat` вообще
 		# называл соседа по кругу
 		if many:
-			text = "♥ теряют все, кроме победителя"
+			text = "Сердце теряют все, кроме победителя"
 		else:
-			text = "%s ♥" % _cap(_says(state, MatchState.other_seat(state, winner),
+			text = "%s сердце" % _cap(_says(state, MatchState.other_seat(state, winner),
 				"теряешь", "теряет"))
+	# только те, кто выбыл именно в этом раунде: иначе «💀 выбывает: Костолом»
+	# повторялось в каждом следующем раунде до конца матча
 	var gone := []
 	for seat in state["order"]:
-		if MatchState.is_out(state, String(seat)):
-			gone.append(MatchState.seat_name(state, String(seat)))
+		var key := String(seat)
+		if MatchState.is_out(state, key) and not _announced_out.has(key):
+			_announced_out[key] = true
+			gone.append(MatchState.seat_name(state, key))
 	if not gone.is_empty():
 		text += "\n💀 выбывает: %s" % ", ".join(gone)
 	return {"title": title, "text": text}
@@ -4015,9 +4173,9 @@ func _match_phrases(winner: String) -> Dictionary:
 			elif solo and winner == mine:
 				text = "Враг повержен!" if vs_bot else "Соперник остался без жизней!"
 			elif solo:
-				text = "Подземелье забрало твои кости." if vs_bot else "Ты остался без жизней."
+				text = "Подземелье забрало твои кости." if vs_bot else "Твои жизни кончились."
 			elif many:
-				text = "%s дошёл до конца с %s." % [MatchState.seat_name(state, winner),
+				text = "%s держится до конца — осталось %s." % [MatchState.seat_name(state, winner),
 					_lives_word(int(state["players"][winner]["lives"]))]
 			else:
 				text = "%s остался без жизней." % MatchState.seat_name(state,
@@ -4028,7 +4186,7 @@ func _match_phrases(winner: String) -> Dictionary:
 			if winner == "":
 				text = "Ничья: %s" % tally
 			else:
-				text = "%s до %d! Итог: %s" % [_cap(_says(state, winner, "добежал", "добежал")),
+				text = "%s до %d! Итог: %s" % [_cap(_says(state, winner, "добираешься", "добирается")),
 					target, tally]
 		_:
 			var top := 0
@@ -4041,7 +4199,7 @@ func _match_phrases(winner: String) -> Dictionary:
 				elif w == top:
 					shared = true
 			if not shared and winner != "":
-				text = "%s %d %s из 3." % [_cap(_says(state, winner, "взял", "взял")),
+				text = "%s %d %s из 3." % [_cap(_says(state, winner, "берёшь", "берёт")),
 					top, _plural(top, "раунд", "раунда", "раундов")]
 			else:
 				text = "Раунды поделили (%s), решили очки за матч: %s" % [
@@ -4082,12 +4240,13 @@ func _animate_place(cell_idx: int) -> void:
 		if c is DieView:
 			c.play_place()
 
-## Шапка карточки: «ТВОЙ ХОД 3» своему ходу, «СОПЕРНИК · ХОД 3» чужому. В хотсите
-## вместо этого имена сидений.
-func _card_head(seat: String, n: int) -> String:
+## Шапка карточки: чей это был ход. Номер убран намеренно — в шапке экрана уже
+## стоит «РАУНД 1 · ХОД 2/6», в ленте свои номера, и три разные нумерации на
+## одном экране читались как «я что-то пропустил».
+func _card_head(seat: String, _n: int) -> String:
 	if _solo(state) and seat == _my_view(state):
-		return "ТВОЙ ХОД %d" % n
-	return "%s · ХОД %d" % [_who_name(state, seat), n]
+		return "ТВОЙ ХОД"
+	return _who_name(state, seat).to_upper()
 
 ## Карточка выбранного хода из ленты — без анимации, просто показать.
 func _show_card(record: Dictionary) -> void:
@@ -4383,6 +4542,7 @@ func _float_text(idx: int, text: String, col: Color, size_px: int = 26) -> void:
 	await get_tree().process_frame
 	# ставим над клеткой, а не по центру: иначе надпись ложится на цифру куба
 	box.global_position = _cell_center(idx) - Vector2(box.size.x * 0.5, box.size.y + 6.0)
+	_clamp_to_screen(box)
 	box.pivot_offset = box.size * 0.5
 	box.scale = Vector2(0.6, 0.6)
 	var tw := create_tween()
@@ -4448,6 +4608,12 @@ func _play_effects(res: Dictionary) -> void:
 
 ## Выкрик комбинации по центру поля: «ПАРА +5», «КАРЕ +40». Чем крупнее комбо,
 ## тем крупнее буквы — пара не должна выглядеть как шестёрка.
+## Держим всплывающую надпись в пределах экрана. Выкрик комбинации садился на
+## x=341 при ширине 390 — игрок читал «СЕ» вместо «СЕТ +15».
+func _clamp_to_screen(node: Control) -> void:
+	var w := get_viewport_rect().size.x
+	node.global_position.x = clampf(node.global_position.x, 8.0, maxf(8.0, w - node.size.x - 8.0))
+
 func _combo_call(name_of_combo: String, bonus: int) -> void:
 	if name_of_combo == "":
 		return
@@ -4489,6 +4655,7 @@ func _combo_call(name_of_combo: String, bonus: int) -> void:
 	# по центру самого поля, а не экрана: комбинация про кубы на доске
 	var board_mid: Vector2 = board_grid.global_position + board_grid.size * 0.5
 	box.global_position = board_mid - box.size * 0.5
+	_clamp_to_screen(box)
 	box.pivot_offset = box.size * 0.5
 	box.scale = Vector2(0.5, 0.5)
 	box.modulate.a = 0.0
@@ -4821,7 +4988,7 @@ func _shot_scenario() -> void:
 			my_seat = "e"
 			_start_mode("classic")
 			busy = true
-			_show_result("ПОРАЖЕНИЕ", "Ты остался без жизней.", "Ещё раз", func(): pass)
+			_show_result("ПОРАЖЕНИЕ", "Твои жизни кончились.", "Ещё раз", func(): pass)
 			_on_lan_match_started("classic", 999)
 			print("оверлей исхода после рестарта: ", over_layer.visible)
 			await get_tree().process_frame
@@ -4938,12 +5105,25 @@ func _label(text: String, size_px: int, col: Color, font_path: String = "",
 		l.add_theme_font_override("font", load(font_path))
 	return l
 
+## Размер в логических единицах, дающий заданный размер в пикселях экрана.
+func _touch(px: float) -> float:
+	var vp := get_viewport_rect().size
+	var k: float = minf(vp.x / 390.0, vp.y / 844.0)
+	if k <= 0.01 or k >= 1.0:
+		return px
+	return px / k
+
 func _button(text: String, ghost: bool = false) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.add_theme_font_size_override("font_size", 13)
-	# 44 и 40: пальцем в 32 px попадать неудобно, а промах по «Меню» уводит из партии
-	b.custom_minimum_size.y = 44 if not ghost else 40
+	# 44 и 40 — в ФИЗИЧЕСКИХ пикселях экрана, а не в логических.
+	#
+	# Игра рисуется в системе 390×844 и растягивается под окно, поэтому на телефоне
+	# 360×640 всё уменьшается до 0.76: «Меню» в 40 логических превращалось в 29
+	# настоящих, вдвое меньше нормы Android. Делим на масштаб холста и получаем
+	# кнопку, которая на любом экране остаётся размером с палец.
+	b.custom_minimum_size.y = _touch(44.0 if not ghost else 40.0)
 	var sb := StyleBoxFlat.new()
 	if ghost:
 		sb.bg_color = Color(1, 1, 1, 0.05)
@@ -5046,7 +5226,29 @@ func _chip(part: Dictionary) -> Control:
 	row.add_child(_label(caption, 12, Palette.MUTED))
 	if part.has("v"):
 		var neg: bool = bool(part.get("neg", false))
-		row.add_child(_label(str(int(part["v"])), 12, Palette.NEG if neg else Palette.GOLD_LIGHT))
+		if bool(part.get("die", false)):
+			# Значение куба, а не очки. Золотая цифра здесь ломала главный контракт
+			# карточки: игрок складывал золотые числа и получал больше, чем итог
+			# хода, потому что «Дружески перенял 7» в сумму не входит. Рисуем как в
+			# вебе — цифрой в костяном мини-кубике.
+			row.add_child(_dval(int(part["v"])))
+			row.add_child(_label(str(int(part.get("pts", 0))), 12, Palette.GOLD_LIGHT))
+		else:
+			row.add_child(_label(str(int(part["v"])), 12, Palette.NEG if neg else Palette.GOLD_LIGHT))
+	return box
+
+## Мини-кубик со значением: отличает «значение куба» от «очки».
+func _dval(v: int) -> Control:
+	var box := PanelContainer.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Palette.BONE
+	sb.set_corner_radius_all(4)
+	sb.content_margin_left = 5
+	sb.content_margin_right = 5
+	sb.content_margin_top = 1
+	sb.content_margin_bottom = 1
+	box.add_theme_stylebox_override("panel", sb)
+	box.add_child(_label(str(v), 11, Palette.BONE_INK, Palette.FONT_UI))
 	return box
 
 ## Виньетка: к краям темнее. Держит взгляд в центре и глушит кладку по углам.
