@@ -2453,19 +2453,27 @@ func _lobby_idle() -> void:
 	var t := _label("ИГРА ПО WI-FI", 20, Palette.GOLD, Palette.FONT_TITLE)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lobby_box.add_child(t)
-	var hint_l := _label("Оба устройства должны быть в одной сети Wi-Fi. Интернет не нужен.", 11, Palette.MUTED)
+	var hint_l := _label("Все устройства должны быть в одной сети Wi-Fi. Интернет не нужен.", 11, Palette.MUTED)
 	hint_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint_l.custom_minimum_size.x = 290
 	hint_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lobby_box.add_child(hint_l)
 
+	# Создание стола: одна подпись и три узкие кнопки вместо трёх одинаковых
+	# золотых строк, среди которых терялась «Найти игру» — а это другое действие.
+	lobby_box.add_child(_label("Создать игру на:", 12, Palette.TEXT))
+	var seats_row := HBoxContainer.new()
+	seats_row.add_theme_constant_override("separation", 8)
+	lobby_box.add_child(seats_row)
 	for seats in [2, 3, 4]:
-		var b := _button("Создать игру на %d" % seats)
+		var b := _button("%d" % seats)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.pressed.connect(_lan_host.bind(seats))
-		lobby_box.add_child(b)
-	var find_btn := _button("Найти игру")
+		seats_row.add_child(b)
+	var find_btn := _button("Найти игру", true)
 	find_btn.pressed.connect(_lan_find)
 	lobby_box.add_child(find_btn)
+	_lobby_friends()
 	var back := _button("Назад", true)
 	back.pressed.connect(func():
 		if lan != null:
@@ -2589,6 +2597,52 @@ func _lobby_manual() -> void:
 	back.pressed.connect(_lobby_not_found)
 	lobby_box.add_child(back)
 
+## Знакомые: с кем уже играли по Wi-Fi. Строка зовёт их в свою игру одним
+## нажатием — поднимаем стол на двоих и стучимся на последний известный адрес.
+##
+## Приглашение долетит, только если у знакомого открыта игра и он в той же сети:
+## разбудить закрытое приложение можно лишь push-уведомлением, а это сервер в
+## интернете, которого у нас нет и который для игры «с женой в соседней комнате»
+## не нужен.
+func _lobby_friends() -> void:
+	var list := Friends.all()
+	if list.is_empty():
+		return
+	lobby_box.add_child(_label("Играли вместе:", 12, Palette.TEXT))
+	var now := _now()
+	for f in list:
+		var row := PanelContainer.new()
+		row.add_theme_stylebox_override("panel", _mode_box())
+		row.custom_minimum_size.y = _touch(44.0)
+		row.mouse_filter = Control.MOUSE_FILTER_STOP
+		var who := String(f["name"])
+		var addr := String(f["address"])
+		row.gui_input.connect(func(e: InputEvent):
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				_invite_friend(who, addr)
+		)
+		var line := HBoxContainer.new()
+		line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.add_child(line)
+		line.add_child(_label(who, 13, Palette.GOLD_LIGHT))
+		line.add_child(_grow())
+		var games := int(f["games"])
+		line.add_child(_label("%s · %d %s" % [
+			Friends.when_text(int(f["last_seen"]), now), games,
+			_plural(games, "партия", "партии", "партий")], 11, Palette.MUTED))
+		lobby_box.add_child(row)
+
+## Позвать знакомого: поднимаем свой стол и шлём ему зов на последний адрес.
+func _invite_friend(who: String, address: String) -> void:
+	_ensure_lan()
+	if not lan.start_host(Profile.display_name(), 2):
+		_lobby_message("Не вышло поднять игру. Уже запущена на этом телефоне?")
+		return
+	opponent = "remote"
+	my_seat = "p"
+	lan.invite([address])
+	_lobby_message("Позвали игрока %s. Он увидит приглашение, если игра у него открыта." % who, false)
+
 func _ensure_lan() -> void:
 	if lan != null:
 		return
@@ -2608,6 +2662,27 @@ func _ensure_lan() -> void:
 	lan.lobby_changed.connect(_on_lan_lobby)
 	lan.party_started.connect(_on_lan_party)
 	lan.party_resync_received.connect(_on_lan_party_resync)
+	lan.invited.connect(_on_lan_invited)
+
+## Знакомый зовёт в игру. Показываем поверх меню — но только там: посреди партии
+## такое окно било бы по рукам.
+func _on_lan_invited(from_name: String, address: String) -> void:
+	if not state.is_empty() or not d_state.is_empty():
+		return
+	if lan != null and lan.connected:
+		return
+	Friends.seen(from_name, address, _now())
+	_hide_banner()
+	_show_result("%s ЗОВЁТ ИГРАТЬ" % from_name.to_upper(),
+		"Игра уже создана — можно присоединиться прямо сейчас.", "Присоединиться", func():
+			menu_layer.visible = false
+			_show_lobby()
+			_lobby_message("Подключаемся к игроку %s…" % from_name, false)
+			lan.join(address)
+	)
+
+func _now() -> int:
+	return int(Time.get_unix_time_from_system())
 
 func _on_lan_hosts(list: Array) -> void:
 	if list.is_empty():
@@ -2726,6 +2801,9 @@ func _on_lan_peer_named(name_of_peer: String) -> void:
 	if name_of_peer == "":
 		return
 	foe_player = name_of_peer
+	# Запоминаем, с кем играли: потом его можно позвать из лобби одним нажатием.
+	# Адрес берём последний известный — в домашней сети он обычно тот же.
+	Friends.remember(name_of_peer, lan.last_address if lan != null else "", _now())
 	# имя могло прийти уже после начала партии — подставляем на месте
 	for st in [state, d_state]:
 		if not st.is_empty() and st.has("seats"):
@@ -3417,6 +3495,13 @@ func _build_overlay() -> Control:
 
 # ----------------------------------------------------------------- меню
 
+## Слушать приглашения, пока игрок не в партии. Без поднятого сокета обнаружения
+## зов знакомого некому услышать; сам сокет — один UDP-порт, он ничего не стоит.
+func _listen_for_invites() -> void:
+	_ensure_lan()
+	if not lan.connected:
+		lan.listen()
+
 func _show_menu() -> void:
 	_new_flow()
 	# уход в меню — выход из сетевой партии: сопернику уходит «вышел», связь
@@ -3439,6 +3524,7 @@ func _show_menu() -> void:
 		event_layer.visible = false
 	event_done = true      # оборвать ожидание ивента, если оно шло
 	menu_note.text = ""
+	_listen_for_invites()  # в меню слышим, если знакомый зовёт в игру
 	_show_kinds()          # меню всегда открывается с выбора вида игры
 	_hide_banner()
 
@@ -4846,6 +4932,10 @@ func _shot_scenario() -> void:
 			_start_mode("classic")
 			_show_rules()
 		"lobby":
+			# для снимка кладём пару знакомых: пустой список ничего не показывает
+			Friends.remember("Костя", "192.168.1.7", int(Time.get_unix_time_from_system()))
+			Friends.remember("Аня", "192.168.1.9",
+				int(Time.get_unix_time_from_system()) - 86400 * 2)
 			_show_lobby()
 		"durak":
 			# кон в разгаре: на столе отбитая пара и неотбитая атака

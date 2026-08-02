@@ -19,6 +19,7 @@ extends Node
 signal peer_connected                     ## соединение установилось
 signal peer_lost                          ## соединение оборвалось
 signal hosts_found(list: Array)           ## найденные хосты: [{name, address}]
+signal invited(from_name: String, address: String)    ## знакомый зовёт в свою игру
 signal match_started(mode: String, seed_value: int)   ## хост задал партию
 signal move_received(seat: String, hand_idx: int, cell_idx: int)
 signal next_round_received
@@ -42,6 +43,9 @@ signal party_started(mode: String, seed_value: int, roster: Array, my_seat: Stri
 const GAME_PORT := 8177
 const DISCOVERY_PORT := 8178
 const DISCOVERY_MAGIC := "kosti-podzemelya-v1"
+## Приглашение шлётся тем же сокетом обнаружения, отдельным словом. Долетает
+## только до открытой игры: разбудить закрытую без сервера и push нельзя.
+const INVITE_WORD := "zovu"
 
 const ANNOUNCE_EVERY := 0.8        # как часто хост объявляет о себе
 
@@ -219,6 +223,11 @@ func _process(dt: float) -> void:
 			reply.set_dest_address(from_ip, _udp.get_packet_port())
 			reply.put_packet(("%s!%s" % [DISCOVERY_MAGIC, player_name]).to_utf8_buffer())
 			reply.close()
+		elif data.begins_with("%s%s!" % [DISCOVERY_MAGIC, INVITE_WORD]):
+			# зовут в игру: показываем, откуда и кто, решает игрок
+			var who := data.substr(DISCOVERY_MAGIC.length() + INVITE_WORD.length() + 1)
+			if not is_host and not connected:
+				invited.emit(who, from_ip)
 		elif _discovering and data.begins_with("%s!" % DISCOVERY_MAGIC):
 			var host_name := data.substr(DISCOVERY_MAGIC.length() + 1)
 			var known := false
@@ -227,6 +236,36 @@ func _process(dt: float) -> void:
 					known = true
 			if not known:
 				_found.append({"name": host_name, "address": from_ip})
+
+## Открыть ухо на приглашения, не начиная ни игру, ни поиск.
+##
+## Сокет обнаружения нужен всегда, пока игрок в меню или в лобби: иначе зов
+## знакомого просто некому услышать. Он дешёвый — один UDP-порт.
+func listen() -> void:
+	if _udp != null:
+		return
+	_udp = PacketPeerUDP.new()
+	_udp.set_broadcast_enabled(true)
+	discovery_ok = _udp.bind(DISCOVERY_PORT) == OK
+	if not discovery_ok:
+		_udp = null
+		return
+	set_process(true)
+
+## Позвать знакомых в свою игру: шлём короткий пакет на их последние адреса.
+## Работает, пока хост поднят, а у соперника открыта игра в той же сети.
+func invite(addresses: Array) -> void:
+	var pack := ("%s%s!%s" % [DISCOVERY_MAGIC, INVITE_WORD, player_name]).to_utf8_buffer()
+	var udp := PacketPeerUDP.new()
+	for a in addresses:
+		var addr := String(a)
+		if addr == "":
+			continue
+		udp.set_dest_address(addr, DISCOVERY_PORT)
+		# дважды: пакет одиночный и потеряться ему проще, чем переспросить
+		udp.put_packet(pack)
+		udp.put_packet(pack)
+	udp.close()
 
 # -------------------------------------------------------------- соединение
 
