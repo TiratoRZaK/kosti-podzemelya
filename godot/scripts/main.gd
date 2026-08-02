@@ -36,10 +36,8 @@ var waiting_remote := false      # поток остановился и ждёт
 var pending_next_round := false  # хост открыл раунд, пока мы ещё доигрывали свой
 
 # узлы
-var foe_name: Label
-var foe_score: Label
-var foe_hearts: LifeRow
-var foe_hand_row: HBoxContainer
+
+var foes_box: VBoxContainer
 var turn_info: Label
 var turn_who: Label
 var board_grid: GridContainer
@@ -51,7 +49,6 @@ var mode_tag: Label
 var toast_label: Label
 var banner_label: Label
 var rules_layer: Control
-var foe_deck: Label
 var hint: Dictionary = {}   # подсказка: какой куб и куда даст комбо
 var hand_row: HBoxContainer
 var my_name: Label
@@ -116,6 +113,10 @@ var draft_offer: Array = []
 var draft_picked: Array = []
 var draft_mode := "draft"
 var draft_seed := 0
+var roster_layer: Control
+var roster_box: VBoxContainer
+var roster_kinds: Array = []   # типы мест со второго: bot | human | off
+var roster_for_run: Array = [] # состав, с которым запущена текущая партия
 
 func _ready() -> void:
 	_parse_args()
@@ -279,6 +280,10 @@ func _parse_args() -> void:
 			_shot_mode = "combo"
 		elif a == "--shot-draft":
 			_shot_mode = "draft"
+		elif a == "--shot-roster":
+			_shot_mode = "roster"
+		elif a == "--shot-three":
+			_shot_mode = "three"
 		elif a == "--shot-name":
 			_shot_mode = "name_ask"
 		elif a == "--shot-modes":
@@ -364,6 +369,7 @@ func _build_ui() -> void:
 	# по центру: на 3×3 клетка мельче ширины экрана, и доска прижималась влево
 	var board_wrap := CenterContainer.new()
 	board_wrap.add_child(board_grid)
+	board_wrap.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	root.add_child(board_wrap)
 	board_holder = board_wrap
 	sel_info = _label("", 12, Palette.MUTED)
@@ -450,30 +456,58 @@ func _title_block() -> Control:
 	box.add_child(mode_tag)
 	return box
 
+## Зона соперников. Раньше сверху была одна панель на одного противника; теперь
+## это список: по строке на каждого, чтобы в игру влезали трое и четверо. При двух
+## игроках выглядит почти как прежде.
 func _foe_zone() -> Control:
 	var panel := _panel()
+	foes_box = VBoxContainer.new()
+	foes_box.add_theme_constant_override("separation", 6)
+	panel.add_child(foes_box)
+	return panel
+
+## Строка соперника: имя, жизни, счёт, рубашки руки и колода.
+func _foe_row(seat: String, compact: bool) -> Control:
 	var v := VBoxContainer.new()
-	panel.add_child(v)
+	v.add_theme_constant_override("separation", 3)
 	var row := HBoxContainer.new()
 	v.add_child(row)
-	foe_name = _label("", 12, Palette.MUTED)
-	row.add_child(foe_name)
+	var nm := _label(_who_name(state, seat), 12, Palette.MUTED)
+	row.add_child(nm)
 	row.add_child(_grow())
-	foe_hearts = LifeRow.new()
-	foe_hearts.setup(Rules.LIVES_MAX, Rules.LIVES_MAX)
-	row.add_child(foe_hearts)
-	row.add_child(_grow())
-	foe_score = _label("0", 20, Palette.GOLD_LIGHT, Palette.FONT_UI)
-	row.add_child(foe_score)
-	var row2 := HBoxContainer.new()
-	v.add_child(row2)
-	foe_hand_row = HBoxContainer.new()
-	foe_hand_row.add_theme_constant_override("separation", 6)
-	row2.add_child(foe_hand_row)
-	row2.add_child(_grow())
-	foe_deck = _label("", 11, Palette.MUTED)
-	row2.add_child(foe_deck)
-	return panel
+	var kind := String(state["cfg"]["kind"])
+	if kind == "lives" or kind == "bo3":
+		var pips := LifeRow.new()
+		if kind == "lives":
+			pips.setup(Rules.LIVES_MAX, int(state["players"][seat]["lives"]))
+		else:
+			pips.setup(2, int(state["players"][seat]["wins"]), LifeRow.KIND_STAR, Palette.GOLD)
+		row.add_child(pips)
+		row.add_child(_grow())
+	var sc := _label(_score_text(seat, kind, state["cfg"]), 20 if not compact else 16,
+		Palette.GOLD_LIGHT, Palette.FONT_UI)
+	row.add_child(sc)
+	# рубашки руки показываем, только когда соперник один: втроём места нет
+	if not compact:
+		var row2 := HBoxContainer.new()
+		v.add_child(row2)
+		var backs := HBoxContainer.new()
+		backs.add_theme_constant_override("separation", 6)
+		for i in state["players"][seat]["hand"].size():
+			var back := Panel.new()
+			back.custom_minimum_size = Vector2(22, 22)
+			back.add_theme_stylebox_override("panel", _mini_box())
+			backs.add_child(back)
+		row2.add_child(backs)
+		row2.add_child(_grow())
+		row2.add_child(_label("Колода: %d" % state["players"][seat]["deck"].size(), 11, Palette.MUTED))
+	else:
+		row.add_child(_label("  %d в руке" % state["players"][seat]["hand"].size(), 11, Palette.MUTED))
+	# чей сейчас ход — видно по подсветке строки
+	if String(state["turn"]) == seat:
+		nm.add_theme_color_override("font_color", Palette.NEG)
+		nm.text = "▶ " + nm.text
+	return v
 
 func _turn_bar() -> Control:
 	var row := HBoxContainer.new()
@@ -1221,6 +1255,10 @@ func _build_menu() -> Control:
 		opponent = "human"
 		_show_modes()
 	))
+	kind_box.add_child(_kind_button("Втроём и вчетвером", "боты и люди рядом за одним столом", func():
+		opponent = "roster"
+		_show_roster()
+	))
 	kind_box.add_child(_kind_button("По Wi-Fi", "с другом рядом, в одной сети Wi-Fi", func():
 		_show_lobby()
 	))
@@ -1313,6 +1351,128 @@ func _mode_button(key: String, cfg: Dictionary) -> Control:
 	s.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	inner.add_child(s)
 	return box
+
+## Экран состава: кто сидит за столом. Первое сиденье всегда моё, остальные
+## переключаются между ботом, человеком рядом и пустым местом. Так собирается
+## партия на троих и четверых — механика это умела давно, не хватало только
+## способа задать состав.
+const SEAT_KINDS := ["bot", "human", "off"]
+const SEAT_KIND_NAMES := {"bot": "бот", "human": "человек рядом", "off": "пусто"}
+
+func _build_roster() -> Control:
+	var layer := _full_dim(0.96)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	layer.add_child(center)
+	var panel := _panel(Palette.PANEL_2)
+	center.add_child(panel)
+	roster_box = VBoxContainer.new()
+	roster_box.add_theme_constant_override("separation", 8)
+	roster_box.custom_minimum_size.x = 310
+	panel.add_child(roster_box)
+	return layer
+
+func _show_roster() -> void:
+	if roster_layer == null:
+		roster_layer = _build_roster()
+		add_child(roster_layer)
+	if roster_kinds.is_empty():
+		roster_kinds = ["bot", "off", "off"]     # по умолчанию — один бот
+	menu_layer.visible = false
+	roster_layer.visible = true
+	_roster_refresh()
+
+func _roster_refresh() -> void:
+	for c in roster_box.get_children():
+		c.queue_free()
+	var t := _label("КТО ИГРАЕТ", 20, Palette.GOLD, Palette.FONT_TITLE)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	roster_box.add_child(t)
+	var count := 1
+	for k in roster_kinds:
+		if String(k) != "off":
+			count += 1
+	var hint := _label("За столом %d: %s" % [count, "ты" if count == 1 else "ты и остальные"],
+		12, Palette.MUTED)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	roster_box.add_child(hint)
+
+	roster_box.add_child(_roster_row(0, "%s — это ты" % Profile.display_name(), ""))
+	for i in roster_kinds.size():
+		var kind := String(roster_kinds[i])
+		roster_box.add_child(_roster_row(i + 1, "Место %d" % (i + 2), kind))
+
+	var go := _button("Дальше")
+	go.disabled = count < 2
+	go.modulate = Color(1, 1, 1, 1.0 if count >= 2 else 0.5)
+	go.pressed.connect(func():
+		roster_layer.visible = false
+		_show_modes()
+		menu_layer.visible = true
+	)
+	roster_box.add_child(go)
+	var back := _button("Назад", true)
+	back.pressed.connect(func():
+		roster_layer.visible = false
+		_show_menu()
+	)
+	roster_box.add_child(back)
+
+## Строка состава: нажатие перебирает бот → человек рядом → пусто.
+func _roster_row(idx: int, title: String, kind: String) -> Control:
+	var box := PanelContainer.new()
+	box.add_theme_stylebox_override("panel", _mode_box())
+	box.custom_minimum_size.x = 290
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(row)
+	row.add_child(_label(title, 13, Palette.GOLD_LIGHT if kind != "off" or idx == 0 else Palette.MUTED))
+	row.add_child(_grow())
+	if idx > 0:
+		row.add_child(_label(String(SEAT_KIND_NAMES.get(kind, kind)), 12, Palette.TEXT))
+		box.mouse_filter = Control.MOUSE_FILTER_STOP
+		box.gui_input.connect(func(e: InputEvent):
+			if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+				var at := SEAT_KINDS.find(kind)
+				roster_kinds[idx - 1] = SEAT_KINDS[(at + 1) % SEAT_KINDS.size()]
+				# пустое место не может стоять перед занятым: сдвигаем хвост
+				_roster_compact()
+				buzz(15)
+				_roster_refresh()
+		)
+	else:
+		row.add_child(_label("человек", 12, Palette.TEXT))
+	return box
+
+## Занятые места идут подряд: «пусто» уезжает в конец, иначе состав получается с
+## дырой и сиденья в партии перестают соответствовать строкам экрана.
+func _roster_compact() -> void:
+	var busy_kinds := []
+	for k in roster_kinds:
+		if String(k) != "off":
+			busy_kinds.append(String(k))
+	while busy_kinds.size() < roster_kinds.size():
+		busy_kinds.append("off")
+	roster_kinds = busy_kinds
+
+## Состав для MatchState: описания сидений по порядку.
+func _roster_for_match() -> Array:
+	var out := [{"kind": "human", "local": true, "name": Profile.display_name()}]
+	var bots := 0
+	var humans := 0
+	for k in roster_kinds:
+		var kind := String(k)
+		if kind == "off":
+			continue
+		if kind == "bot":
+			out.append({"kind": "bot", "local": false,
+				"name": MatchState.BOT_NAMES[mini(bots, MatchState.BOT_NAMES.size() - 1)]})
+			bots += 1
+		else:
+			humans += 1
+			out.append({"kind": "human", "local": true,
+				"name": "Игрок %d" % (humans + 1)})
+	return out
 
 ## Экран драфта: из тридцати предложенных кубов игрок набирает восемнадцать.
 ##
@@ -2106,6 +2266,7 @@ func _start_mode(key: String, deck: Array = []) -> void:
 		_show_draft(key)
 		return
 	var seed_value := draft_seed if not deck.is_empty() else (int(Time.get_unix_time_from_system()) & 0x7fffffff)
+	roster_for_run = _roster_for_match() if opponent == "roster" else []
 	if opponent == "remote" and lan != null and lan.is_host:
 		lan.send_start(key, seed_value)      # соперник соберёт ту же раздачу из сида
 	_launch_match(key, seed_value, deck)
@@ -2124,7 +2285,7 @@ func _launch_match(key: String, seed_value: int, deck: Array = []) -> void:
 	durak_layer.visible = false
 	battle_root.visible = true
 	selected = -1
-	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name(), deck)
+	state = MatchState.new_match(key, seed_value, opponent, my_seat, foe_player, Profile.display_name(), deck, roster_for_run)
 	board_grid.columns = int(state["cfg"]["cols"])
 	hist_sel = -1
 	mode_tag.text = String(state["cfg"]["title"]).to_upper()
@@ -2271,27 +2432,29 @@ func _refresh() -> void:
 		return
 	var cfg: Dictionary = state["cfg"]
 	var me := viewer()
-	var foe := MatchState.other_seat(state, me)
 	my_name.text = MatchState.seat_name(state, me).to_upper()
-	foe_name.text = MatchState.seat_name(state, foe).to_upper()
 	var kind := String(cfg["kind"])
 	_roll_score(my_score, me, kind, cfg)
-	_roll_score(foe_score, foe, kind, cfg)
 	my_score.add_theme_color_override("font_color",
 		Palette.NEG if int(state["players"][me]["score"]) < 0 else Palette.GOLD_LIGHT)
 	if kind == "lives":
 		my_hearts.setup(Rules.LIVES_MAX, int(state["players"][me]["lives"]))
-		foe_hearts.setup(Rules.LIVES_MAX, int(state["players"][foe]["lives"]))
 		my_hearts.visible = true
-		foe_hearts.visible = true
 	elif kind == "bo3":
 		my_hearts.setup(2, int(state["players"][me]["wins"]), LifeRow.KIND_STAR, Palette.GOLD)
-		foe_hearts.setup(2, int(state["players"][foe]["wins"]), LifeRow.KIND_STAR, Palette.GOLD)
 		my_hearts.visible = true
-		foe_hearts.visible = true
 	else:
 		my_hearts.visible = false
-		foe_hearts.visible = false
+	# соперники строками: с двумя игроками одна панель как раньше, с тремя-четырьмя
+	# каждая строка сжимается и рубашки руки уступают место счёту
+	for c in foes_box.get_children():
+		c.queue_free()
+	var foes := []
+	for seat in state["order"]:
+		if seat != me:
+			foes.append(seat)
+	for seat in foes:
+		foes_box.add_child(_foe_row(String(seat), foes.size() > 1))
 	my_deck.text = "Колода: %d" % state["players"][me]["deck"].size()
 	var turn := String(state["turn"])
 	var move_no: int = mini(int(state["players"][turn]["moves"]) + 1, int(cfg["moves"]))
@@ -2304,15 +2467,6 @@ func _refresh() -> void:
 		turn_who.text = "ХОД: " + MatchState.seat_name(state, turn).to_upper()
 	turn_who.add_theme_color_override("font_color", Palette.GOLD_LIGHT if turn == me else Palette.NEG)
 
-	for c in foe_hand_row.get_children():
-		c.queue_free()
-	for i in state["players"][foe]["hand"].size():
-		var back := Panel.new()
-		back.custom_minimum_size = Vector2(22, 22)
-		back.add_theme_stylebox_override("panel", _mini_box())
-		foe_hand_row.add_child(back)
-
-	foe_deck.text = "Колода: %d" % state["players"][foe]["deck"].size()
 	hint = _find_hint(me) if input_allowed() and String(state["turn"]) == me else {}
 	_rebuild_board(me)
 	_rebuild_hand(me)
@@ -2427,7 +2581,8 @@ func _rebuild_board(me: String) -> void:
 			# сиденье, кровь — второе. Иначе у второго игрока кубы в руке красные,
 			# а на доске становились белыми
 			d.setup(int(cell["v"]), String(cell["type"]), String(cell["owner"]) == "p",
-				not hidden or seen, int(cell["shield"]))
+				not hidden or seen, int(cell["shield"]),
+				int(state["order"].find(String(cell["owner"]))))
 
 ## Размер клетки: по ширине экрана и по тому, что реально осталось от высоты.
 ##
@@ -2439,6 +2594,11 @@ func _cell_size(cols: int, cells: int) -> float:
 	var rows: int = ceili(float(cells) / float(cols))
 	var by_width: float = (390.0 - _safe.x - _safe.z - CELL_GAP * (cols - 1)) / float(cols)
 	var by_height := by_width
+	# после раскладки контейнер сам сказал, сколько места досталось доске —
+	# считаем от него. Расчёт по сумме минимумов оставлен на первый кадр, когда
+	# размеры ещё не известны.
+	if board_holder != null and board_holder.size.y > 40.0:
+		return maxf(minf(by_width, (board_holder.size.y - CELL_GAP * (rows - 1)) / float(rows)), 46.0)
 	if battle_col != null and board_holder != null:
 		var sep: float = float(battle_col.get_theme_constant("separation"))
 		var need := 0.0
@@ -2465,7 +2625,8 @@ func _rebuild_hand(me: String) -> void:
 		d.custom_minimum_size = Vector2(hand_px, hand_px)
 		d.clickable = can
 		# в своей руке владелец видит всё, включая ловушки
-		d.setup(int(die["value"]), String(die["type"]), me == "p", true)
+		d.setup(int(die["value"]), String(die["type"]), me == "p", true, 0,
+			int(state["order"].find(me)))
 		d.pressed.connect(_on_hand_pressed.bind(i))
 		hand_row.add_child(d)
 		if i == selected:
@@ -2614,8 +2775,12 @@ func _my_view(st: Dictionary) -> String:
 
 ## Имя в именительном падеже для заголовков: «ТЫ», «СОПЕРНИК», «ИГРОК 2».
 func _who_name(st: Dictionary, seat: String) -> String:
-	if _solo(st):
+	# «СОПЕРНИК» годится, когда он один; втроём нужны имена, иначе строки
+	# соперников не отличить друг от друга
+	if _solo(st) and st["order"].size() <= 2:
 		return "ТЫ" if seat == _my_view(st) else "СОПЕРНИК"
+	if seat == _my_view(st) and _solo(st):
+		return "ТЫ"
 	return MatchState.seat_name(st, seat).to_upper()
 
 ## Исход раунда до появления окна: свой раунд — золотая вспышка и баннер, чужой —
@@ -3288,6 +3453,23 @@ func _shot_scenario() -> void:
 			# второй шаг меню: выбор режима после выбора вида игры
 			_show_modes()
 			await get_tree().process_frame
+		"roster":
+			roster_kinds = ["bot", "bot", "off"]
+			_show_roster()
+			await get_tree().process_frame
+		"three":
+			# партия на троих: я и два бота
+			opponent = "roster"
+			roster_kinds = ["bot", "bot", "off"]
+			_start_mode("classic")
+			state["board"][0] = {"v": 4, "type": "basic", "owner": "p", "shield": 0}
+			state["board"][2] = {"v": 5, "type": "basic", "owner": "e", "shield": 0}
+			state["board"][4] = {"v": 3, "type": "basic", "owner": "c", "shield": 0}
+			state["shown_to"] = "p"
+			busy = false
+			_refresh()
+			_relayout_soon()
+			await get_tree().create_timer(0.2).timeout
 		"draft":
 			opponent = "bot"
 			_show_draft("draft")

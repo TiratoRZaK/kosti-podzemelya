@@ -19,7 +19,7 @@ const SHADER_PATH := "res://assets/shaders/die.gdshader"
 
 var value: int = 1
 var type_id: String = "basic"
-var is_player: bool = true
+var seat_index: int = 0     # 0 кость, 1 кровь, 2 мох, 3 лазурь
 var show_badge: bool = true      # скрытый тип чужого куба значка не получает
 var shield_charges: int = 0
 
@@ -77,10 +77,11 @@ func _build() -> void:
 	_apply()
 	_sync_size()
 
-func setup(v: int, t: String, player: bool, badge: bool, shield: int = 0) -> void:
+func setup(v: int, t: String, player: bool, badge: bool, shield: int = 0, seat_no: int = -1) -> void:
 	value = v
 	type_id = t
-	is_player = player
+	# player оставлен для вызовов на двоих: там кость против крови
+	seat_index = seat_no if seat_no >= 0 else (0 if player else 1)
 	show_badge = badge
 	shield_charges = shield
 	if is_inside_tree() and _mat != null:
@@ -88,7 +89,7 @@ func setup(v: int, t: String, player: bool, badge: bool, shield: int = 0) -> voi
 		_sync_size()
 
 func _apply() -> void:
-	var f := Palette.face(is_player)
+	var f := Palette.face_of(seat_index)
 	_mat.set_shader_parameter("face_top", f["top"])
 	_mat.set_shader_parameter("face_mid", f["mid"])
 	_mat.set_shader_parameter("face_bot", f["bottom"])

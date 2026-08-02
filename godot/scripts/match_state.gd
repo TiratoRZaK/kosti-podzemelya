@@ -58,6 +58,28 @@ const DURAK_MODE := {
 ## сиденье второе, и именно оно local.
 ## my_name — имя из профиля игрока. Пустое означает «профиля нет», тогда сиденья
 ## зовутся как раньше: «Ты» против бота и «Игрок 1» в хотсите.
+## Сиденья на любое число игроков. `roster` — список описаний по порядку:
+## {"kind": "human"|"bot"|"remote", "local": bool, "name": String}. Пустой список
+## означает старую двойку, чтобы вызовы на двоих не переписывать.
+const SEAT_IDS := ["p", "e", "c", "d"]
+const SEAT_NAMES := ["Игрок 1", "Игрок 2", "Игрок 3", "Игрок 4"]
+const BOT_NAMES := ["Враг", "Костолом", "Могильщик", "Скелет"]
+
+static func seat_ids(count: int) -> Array:
+	return SEAT_IDS.slice(0, clampi(count, 2, SEAT_IDS.size()))
+
+static func make_roster_seats(roster: Array) -> Dictionary:
+	var seats := {}
+	var ids := seat_ids(roster.size())
+	for i in ids.size():
+		var d: Dictionary = roster[i]
+		seats[ids[i]] = {
+			"kind": String(d.get("kind", "bot")),
+			"local": bool(d.get("local", false)),
+			"name": String(d.get("name", SEAT_NAMES[i])),
+		}
+	return seats
+
 static func make_seats(opponent: String, my_seat: String = "p", foe_name: String = "Соперник",
 		my_name: String = "") -> Dictionary:
 	if opponent == "human":
@@ -166,9 +188,9 @@ static func replay(mode_key: String, seed_value: int, opponent: String, my_seat:
 ## случайно»: так партию собирает клиент по сети и кнопка «Добрать случайно».
 static func new_match(mode_key: String, seed_value: int, opponent: String,
 		my_seat: String = "p", foe_name: String = "Соперник", my_name: String = "",
-		picked: Array = []) -> Dictionary:
+		picked: Array = [], roster: Array = []) -> Dictionary:
 	var cfg: Dictionary = MODES[mode_key]
-	var order := ["p", "e"]
+	var order: Array = seat_ids(roster.size()) if roster.size() >= 2 else ["p", "e"]
 	var players := {}
 	for seat in order:
 		players[seat] = {
@@ -179,7 +201,7 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 		"mode": mode_key, "cfg": cfg, "seed": seed_value,
 		"cols": int(cfg["cols"]), "board": [],
 		"order": order, "players": players,
-		"seats": make_seats(opponent, my_seat, foe_name, my_name),
+		"seats": make_roster_seats(roster) if roster.size() >= 2 			else make_seats(opponent, my_seat, foe_name, my_name),
 		"turn": "p", "first_seat": "p",
 		"round": 0, "history": [], "log": [], "shown_to": "", "veil": "",
 		"over": false, "outcome": {},
@@ -188,8 +210,8 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 	# общая колода гонки: одна база, перемешанная каждому по-своему
 	if String(cfg["deck"]) == "shared":
 		var base := make_deck(state["rng"], 18)
-		players["p"]["deck"] = shuffled(state["rng"], base)
-		players["e"]["deck"] = shuffled(state["rng"], base)
+		for seat in order:
+			players[seat]["deck"] = shuffled(state["rng"], base)
 	# драфт: 18 кубов из 30 предложенных, у соперника та же колода. Экран выбора
 	# ещё не перенесён, поэтому набор случайный — как кнопка «Случайно» в вебе.
 	# Предложенные 30 держим в состоянии: экран драфта потом возьмёт их отсюда.
@@ -198,8 +220,8 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 		state["draft_offer"] = offer
 		# у соперника та же колода: состязание в игре, а не в раздаче
 		var chosen: Array = picked if not picked.is_empty() else shuffled(state["rng"], offer).slice(0, DRAFT_PICK)
-		players["p"]["deck"] = shuffled(state["rng"], chosen)
-		players["e"]["deck"] = shuffled(state["rng"], chosen)
+		for seat in order:
+			players[seat]["deck"] = shuffled(state["rng"], chosen)
 	new_round(state)
 	return state
 
@@ -241,10 +263,17 @@ static func new_round(state: Dictionary) -> void:
 	# чередовании в трёх раундах одно сиденье начинало дважды — и режимы «до трёх
 	# побед» ложились в сторону второго игрока.
 	state["turn"] = String(state["first_seat"])
-	# компенсация за невыгодный первый ход начисляется сразу — она видна в счёте
+	# Компенсация за невыгодный ход по порядку: чем раньше ходишь, тем больше.
+	# Отвечать выгоднее, чем начинать, и с тремя игроками последний брал матчи
+	# заметно чаще — компенсация распределяется по всем, а не только первому.
 	if Rules.FIRST_MOVE_KOMI != 0:
-		var starter: String = String(state["turn"])
-		state["players"][starter]["score"] = int(state["players"][starter]["score"]) + Rules.FIRST_MOVE_KOMI
+		var order: Array = state["order"]
+		var n := order.size()
+		var start := order.find(String(state["turn"]))
+		for k in n:
+			var seat := String(order[(start + k) % n])
+			var komi := int(round(float(Rules.FIRST_MOVE_KOMI) * float(n - 1 - k) / float(n - 1)))
+			state["players"][seat]["score"] = int(state["players"][seat]["score"]) + komi
 	state["first_seat"] = other_seat(state, String(state["first_seat"]))
 	state["shown_to"] = ""
 	state["history"] = []
@@ -319,19 +348,28 @@ static func advance(state: Dictionary) -> Dictionary:
 # ----------------------------------------------------------------- исходы
 
 ## Кто взял раунд. Возвращает {"winner": seat|"", "detail": String}.
+## Работает на любое число сидений: берём лучший показатель, а ничья объявляется,
+## когда лучших несколько. Раньше сравнивались строго первые два сиденья, и с
+## тремя игроками третий просто не учитывался.
 static func round_outcome(state: Dictionary) -> Dictionary:
 	var cfg: Dictionary = state["cfg"]
-	var a := String(state["order"][0])
-	var b := String(state["order"][1])
-	if String(cfg.get("win_by", "")) == "count":
-		var ca := int(state["players"][a].get("held", 0))
-		var cb := int(state["players"][b].get("held", 0))
-		var w := "" if ca == cb else (a if ca > cb else b)
-		return {"winner": w, "detail": "Удержано клеток %d : %d" % [ca, cb]}
-	var sa := int(state["players"][a]["score"])
-	var sb := int(state["players"][b]["score"])
-	var w2 := "" if sa == sb else (a if sa > sb else b)
-	return {"winner": w2, "detail": "Счёт %d : %d" % [sa, sb]}
+	var by_count: bool = String(cfg.get("win_by", "")) == "count"
+	var best := -(1 << 30)
+	var winners := []
+	var parts := []
+	for seat in state["order"]:
+		var v: int = int(state["players"][seat].get("held", 0)) if by_count 			else int(state["players"][seat]["score"])
+		parts.append(str(v))
+		if v > best:
+			best = v
+			winners = [seat]
+		elif v == best:
+			winners.append(seat)
+	var label: String = "Удержано клеток " if by_count else "Счёт "
+	return {
+		"winner": String(winners[0]) if winners.size() == 1 else "",
+		"detail": label + " : ".join(parts),
+	}
 
 ## Закрыть раунд: списать жизнь или засчитать победу в раунде. Возвращает
 ## {"winner": seat|"", "detail": String, "match_over": bool}.
@@ -340,15 +378,34 @@ static func close_round(state: Dictionary) -> Dictionary:
 	var out := round_outcome(state)
 	var kind := String(cfg["kind"])
 	if kind == "lives":
-		if out["winner"] != "":
-			var loser := other_seat(state, String(out["winner"]))
-			state["players"][loser]["lives"] = int(state["players"][loser]["lives"]) - 1
+		if state["order"].size() <= 2:
+			if out["winner"] != "":
+				var loser := other_seat(state, String(out["winner"]))
+				state["players"][loser]["lives"] = int(state["players"][loser]["lives"]) - 1
+		else:
+			# Втроём и вчетвером жизнь теряет только последний по счёту. Списывать
+			# у всех, кроме победителя, нельзя: за три раунда жизни кончались у
+			# всех разом, и треть партий вчетвером заканчивалась ничьей.
+			var by_count: bool = String(cfg.get("win_by", "")) == "count"
+			var worst := 1 << 30
+			var losers := []
+			for seat in state["order"]:
+				var v: int = int(state["players"][seat].get("held", 0)) if by_count 					else int(state["players"][seat]["score"])
+				if v < worst:
+					worst = v
+					losers = [seat]
+				elif v == worst:
+					losers.append(seat)
+			for seat in losers:
+				state["players"][seat]["lives"] = int(state["players"][seat]["lives"]) - 1
 	elif kind == "bo3":
 		if out["winner"] != "":
 			var w: String = String(out["winner"])
 			state["players"][w]["wins"] = int(state["players"][w]["wins"]) + 1
-		for seat in state["order"]:
-			state["players"][seat]["total"] = int(state["players"][seat]["total"]) + int(state["players"][seat]["score"])
+	# сумма очков за матч копится всегда: втроём и вчетвером жизни у нескольких
+	# игроков часто равны, и без этого тай-брейка матч кончался ничьей
+	for seat in state["order"]:
+		state["players"][seat]["total"] = int(state["players"][seat]["total"]) + int(state["players"][seat]["score"])
 	# Следующий раунд начинает победитель этого. Ходить первым невыгодно: правило
 	# съедения «не меньше» отдаёт преимущество отвечающему, и раньше при простом
 	# чередовании в трёх раундах одно сиденье начинало дважды — режимы «до трёх
@@ -384,24 +441,47 @@ static func is_match_over(state: Dictionary) -> bool:
 static func match_outcome(state: Dictionary) -> Dictionary:
 	var cfg: Dictionary = state["cfg"]
 	var kind := String(cfg["kind"])
-	var a := String(state["order"][0])
-	var b := String(state["order"][1])
+	# Итог считается по любому числу сидений: сравниваем нужный показатель у всех,
+	# ничья — когда лучших несколько. С тремя игроками прежний код сравнивал только
+	# первые два сиденья и объявлял победителем не того.
 	if kind == "lives":
-		var la := int(state["players"][a]["lives"])
-		var lb := int(state["players"][b]["lives"])
-		var w := "" if la == lb else (a if la > lb else b)
-		return {"winner": w, "detail": "Жизни %d : %d" % [la, lb]}
+		var by_lives := _best_by(state, func(pl): return int(pl["lives"]), "Жизни ")
+		if String(by_lives["winner"]) != "":
+			return by_lives
+		# жизни равны — решают набранные за матч очки
+		var by_total := _best_by(state, func(pl): return int(pl["total"]), "")
+		return {
+			"winner": String(by_total["winner"]),
+			"detail": "%s · очки за матч %s" % [String(by_lives["detail"]),
+				String(by_total["detail"]).strip_edges()],
+		}
 	if kind == "race":
-		var sa := int(state["players"][a]["score"])
-		var sb := int(state["players"][b]["score"])
-		var w2 := "" if sa == sb else (a if sa > sb else b)
-		return {"winner": w2, "detail": "Итог %d : %d" % [sa, sb]}
+		return _best_by(state, func(pl): return int(pl["score"]), "Итог ")
 	# bo3: сперва победы в раундах, при равенстве — очки за матч
-	var wa := int(state["players"][a]["wins"])
-	var wb := int(state["players"][b]["wins"])
-	if wa != wb:
-		return {"winner": a if wa > wb else b, "detail": "Победы %d : %d" % [wa, wb]}
-	var ta := int(state["players"][a]["total"])
-	var tb := int(state["players"][b]["total"])
-	var w3 := "" if ta == tb else (a if ta > tb else b)
-	return {"winner": w3, "detail": "Победы %d : %d · очки за матч %d : %d" % [wa, wb, ta, tb]}
+	var by_wins := _best_by(state, func(pl): return int(pl["wins"]), "Победы ")
+	if String(by_wins["winner"]) != "":
+		return by_wins
+	var by_total := _best_by(state, func(pl): return int(pl["total"]), "")
+	return {
+		"winner": String(by_total["winner"]),
+		"detail": "%s · очки за матч %s" % [String(by_wins["detail"]),
+			String(by_total["detail"]).strip_edges()],
+	}
+
+## Лучший по показателю. Ничья, если лучших несколько.
+static func _best_by(state: Dictionary, pick: Callable, label: String) -> Dictionary:
+	var best := -(1 << 30)
+	var winners := []
+	var parts := []
+	for seat in state["order"]:
+		var v := int(pick.call(state["players"][seat]))
+		parts.append(str(v))
+		if v > best:
+			best = v
+			winners = [seat]
+		elif v == best:
+			winners.append(seat)
+	return {
+		"winner": String(winners[0]) if winners.size() == 1 else "",
+		"detail": label + " : ".join(parts),
+	}

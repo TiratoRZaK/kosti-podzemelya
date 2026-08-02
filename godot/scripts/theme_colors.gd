@@ -48,6 +48,22 @@ const SUIT_FACE := [
 	{"bg": Color("447a4e"), "edge": Color("1c3d24"), "ink": Color("e2f4de")},
 ]
 
+## Лицо куба по сиденью: кость, кровь, мох, лазурь. Втроём и вчетвером двух
+## цветов не хватает — игрок должен различать, чей куб стоит на клетке.
+const SEAT_FACES := [
+	{"top": Color("fff5da"), "mid": Color("ead9b6"), "bottom": Color("cdb789"),
+	 "edge": Color("b09a6e"), "deep": Color("7d6b47"), "ink": Color("2b2114")},
+	{"top": Color("b04355"), "mid": Color("93283a"), "bottom": Color("7e2030"),
+	 "edge": Color("4d1220"), "deep": Color("330c17"), "ink": Color("f3d3c4")},
+	{"top": Color("6fae74"), "mid": Color("4c8a54"), "bottom": Color("3a6b41"),
+	 "edge": Color("1f3d24"), "deep": Color("142a18"), "ink": Color("e6f4e2")},
+	{"top": Color("6aa8c8"), "mid": Color("47829f"), "bottom": Color("35657d"),
+	 "edge": Color("1d3a48"), "deep": Color("122630"), "ink": Color("e2f0f7")},
+]
+
+static func face_of(seat_index: int) -> Dictionary:
+	return SEAT_FACES[clampi(seat_index, 0, SEAT_FACES.size() - 1)]
+
 ## Лицо куба: у игрока костяное, у соперника кровавое.
 static func face(seat_is_player: bool) -> Dictionary:
 	if seat_is_player:
