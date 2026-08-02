@@ -1491,6 +1491,22 @@ func _save_name() -> void:
 func _build_veil() -> Control:
 	# ширма плотная: сквозь неё не должно просвечивать поле с чужими ловушками
 	var layer := _full_dim(1.0)
+	# Две каменные створки поверх заливки: они сходятся, закрывая экран, и
+	# расходятся, когда следующий игрок готов. Раньше был просто чёрный кадр —
+	# самый безрадостный экран в игре, а показывается он каждый второй ход.
+	for side in [-1, 1]:
+		var wing := Panel.new()
+		var wsb := StyleBoxFlat.new()
+		wsb.bg_color = Color("18122a")
+		wsb.border_color = Color("2f2247")
+		wsb.set_border_width_all(3)
+		wsb.content_margin_left = 0
+		wing.add_theme_stylebox_override("panel", wsb)
+		# размеры и координаты задаём сами: с якорями «прижать к краю» твин по x
+		# спорил с раскладкой, и правая створка уезжала в левый край
+		wing.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		layer.add_child(wing)
+		veil_wings.append(wing)
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	layer.add_child(center)
@@ -2076,9 +2092,26 @@ func _begin_turn(seat: String) -> void:
 	busy = false
 	_refresh()
 
+## Створки съезжаются к центру: экран закрывается «дверью», а не просто гаснет.
+func _veil_doors(closed: bool) -> void:
+	var vp := get_viewport_rect().size
+	var half := vp.x * 0.5 + 1.0        # +1: чтобы посередине не осталось щели
+	for i in veil_wings.size():
+		var wing: Control = veil_wings[i]
+		wing.size = Vector2(half, vp.y)
+		wing.position.y = 0.0
+		var shut: float = 0.0 if i == 0 else vp.x - half
+		var opened: float = -half if i == 0 else vp.x
+		if closed:
+			# перед закрытием ставим створки снаружи, чтобы движение было видно
+			wing.position.x = opened
+		var tw := create_tween()
+		tw.tween_property(wing, "position:x", shut if closed else opened, 0.3) 			.set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
 func _show_veil(seat: String) -> void:
 	busy = true
 	selected = -1
+	_veil_doors(true)
 	# баннер раунда живёт своей анимацией и успевает лечь поверх заголовка ширмы
 	_hide_banner()
 	var st: Dictionary = d_state if in_durak else state
@@ -2087,6 +2120,7 @@ func _show_veil(seat: String) -> void:
 	_refresh_screen()
 
 func _hide_veil() -> void:
+	_veil_doors(false)
 	veil_layer.visible = false
 	if in_durak:
 		d_state["shown_to"] = Durak.actor(d_state)
@@ -2166,8 +2200,8 @@ func _refresh() -> void:
 	my_name.text = MatchState.seat_name(state, me).to_upper()
 	foe_name.text = MatchState.seat_name(state, foe).to_upper()
 	var kind := String(cfg["kind"])
-	my_score.text = _score_text(me, kind, cfg)
-	foe_score.text = _score_text(foe, kind, cfg)
+	_roll_score(my_score, me, kind, cfg)
+	_roll_score(foe_score, foe, kind, cfg)
 	my_score.add_theme_color_override("font_color",
 		Palette.NEG if int(state["players"][me]["score"]) < 0 else Palette.GOLD_LIGHT)
 	if kind == "lives":
@@ -2257,8 +2291,22 @@ func _rebuild_history() -> void:
 		row.add_child(val)
 		hist_strip.add_child(pill)
 
-func _score_text(seat: String, kind: String, cfg: Dictionary) -> String:
-	var sc := int(state["players"][seat]["score"])
+## Счёт прокручивается до нового значения, а не перескакивает: за ход прилетает
+## сразу два-три десятка очков, и мгновенная подмена числа читалась как сбой.
+func _roll_score(label: Label, seat: String, kind: String, cfg: Dictionary) -> void:
+	var target := int(state["players"][seat]["score"])
+	var shown: int = int(_shown_score.get(seat, target))
+	_shown_score[seat] = target
+	if shown == target or absi(target - shown) > 400:
+		label.text = _score_text(seat, kind, cfg, target)
+		return
+	var tw := create_tween()
+	tw.tween_method(func(v: float):
+		label.text = _score_text(seat, kind, cfg, int(round(v)))
+	, float(shown), float(target), 0.45).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+
+func _score_text(seat: String, kind: String, cfg: Dictionary, override_score: int = -999999) -> String:
+	var sc := int(state["players"][seat]["score"]) if override_score == -999999 else override_score
 	if kind == "race":
 		return "%d/%d" % [sc, int(cfg["target"])]
 	if String(cfg.get("win_by", "")) == "count":
@@ -2280,7 +2328,9 @@ func _rebuild_board(me: String) -> void:
 	for i in state["board"].size():
 		var slot := Panel.new()
 		slot.custom_minimum_size = Vector2(cell_w, cell_w)
-		slot.add_theme_stylebox_override("panel", _cell_box(valid.has(i), state["board"][i] != null, i == hint_cell))
+		var cell_owner := "" if state["board"][i] == null else String(state["board"][i]["owner"])
+		slot.add_theme_stylebox_override("panel", _cell_box(valid.has(i), state["board"][i] != null,
+			i == hint_cell, cell_owner))
 		slot.mouse_filter = Control.MOUSE_FILTER_STOP
 		slot.gui_input.connect(_on_cell_input.bind(i))
 		board_grid.add_child(slot)
@@ -2671,8 +2721,15 @@ func _play_card(res: Dictionary) -> void:
 		var p: Dictionary = parts[i]
 		var chip: Control = chips.get_child(i)
 		if p.has("hl"):
-			for ci in p["hl"]:
-				_glow_cell(int(ci))
+			if String(p.get("cls", "")) == "combo":
+				# кубы комбинации вспыхивают по очереди: видно, какие именно
+				# сложились, а не «вся доска мигнула»
+				for ci in p["hl"]:
+					_glow_cell(int(ci))
+					await get_tree().create_timer(0.07).timeout
+			else:
+				for ci in p["hl"]:
+					_glow_cell(int(ci))
 		if p.has("v") and not p.get("die", false):
 			await _fly_number(p, chip, seat)
 		_pop_in(chip)
@@ -2775,6 +2832,8 @@ func _cell_center(idx: int) -> Vector2:
 ## отдельно: если два толчка наложатся, второй запомнил бы уже сдвинутое
 ## положение — и после серии экран так и остался бы съехавшим за край.
 var _shake_tween: Tween
+var _shown_score := {}      # какое число счёта сейчас на экране, для прокрутки
+var veil_wings: Array = []  # створки ширмы
 
 ## Тряска сдвигает весь холст, а не контейнер экрана.
 ##
@@ -3385,7 +3444,9 @@ func _mode_box(pressed: bool = false) -> StyleBoxFlat:
 	sb.content_margin_bottom = 8
 	return sb
 
-func _cell_box(valid: bool, has_die: bool, hinted: bool = false) -> StyleBoxFlat:
+## bone/blood — чей куб стоит в клетке: под ним зажигается свет своего цвета.
+## Плоская сетка одинаковых клеток читалась как таблица, а не как поле боя.
+func _cell_box(valid: bool, has_die: bool, hinted: bool = false, owner_seat: String = "") -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Palette.CELL
 	sb.set_corner_radius_all(12)
@@ -3395,6 +3456,11 @@ func _cell_box(valid: bool, has_die: bool, hinted: bool = false) -> StyleBoxFlat
 	sb.border_color = Palette.CELL_EDGE
 	if valid:
 		sb.border_color = Palette.DANGER if has_die else Palette.GOLD
+	if has_die and owner_seat != "" and not hinted:
+		# свет из-под куба: костяной тёплый, кровавый багровый
+		var glow := Color(1.0, 0.9, 0.62, 0.28) if owner_seat == "p" else Color(1.0, 0.35, 0.4, 0.26)
+		sb.shadow_color = glow
+		sb.shadow_size = 10
 	if hinted:
 		# подсказанная клетка светится ярче остальных
 		sb.border_color = Palette.GOLD_LIGHT
