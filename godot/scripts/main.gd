@@ -1751,6 +1751,7 @@ func _ensure_lan() -> void:
 	lan.match_left.connect(_on_lan_left)
 	lan.durak_action_received.connect(_on_lan_durak_action)
 	lan.peer_named.connect(_on_lan_peer_named)
+	lan.resync_received.connect(_on_lan_resync)
 
 func _on_lan_hosts(list: Array) -> void:
 	if list.is_empty():
@@ -1790,6 +1791,29 @@ func _on_lan_hosts(list: Array) -> void:
 	back.pressed.connect(_lobby_idle)
 	lobby_box.add_child(back)
 
+## Партия пришла заново после переподключения: собираем от сида и повторяем ходы.
+func _on_lan_resync(mode: String, seed_value: int, log: Array) -> void:
+	_new_flow()
+	over_layer.visible = false
+	menu_layer.visible = false
+	lobby_layer.visible = false
+	in_durak = false
+	d_state = {}
+	durak_layer.visible = false
+	battle_root.visible = true
+	opponent = "remote"
+	state = MatchState.replay(mode, seed_value, "remote", my_seat, foe_player,
+		Profile.display_name(), [], log)
+	board_grid.columns = int(state["cfg"]["cols"])
+	hist_sel = -1
+	mode_tag.text = String(state["cfg"]["title"]).to_upper()
+	for c in card_box.get_children():
+		c.queue_free()
+	toast("Вернулись в партию")
+	_refresh()
+	_relayout_soon()
+	_begin_turn(String(state["turn"]))
+
 func _on_lan_peer_named(name_of_peer: String) -> void:
 	if name_of_peer == "":
 		return
@@ -1825,9 +1849,32 @@ func _on_lan_lost() -> void:
 	_new_flow()
 	if state.is_empty() and d_state.is_empty():
 		_lobby_message("Соперник отключился.")
+		return
+	busy = true
+	# Партию не хороним: связь на телефоне рвётся от любой мелочи, а состояние
+	# восстанавливается из сида и журнала ходов. Клиент сам стучится к хосту,
+	# хост просто ждёт — сервер уже слушает порт.
+	if lan != null and not lan.is_host and lan.last_address != "":
+		_show_result("СВЯЗЬ ПОТЕРЯНА", "Пробуем вернуться в партию…", "В меню", _show_menu)
+		_try_reconnect()
 	else:
-		busy = true
-		_show_result("СВЯЗЬ ПОТЕРЯНА", "Соперник отключился.", "В меню", _show_menu)
+		_show_result("СВЯЗЬ ПОТЕРЯНА", "Ждём соперника: партия сохранена, он может вернуться.",
+			"В меню", _show_menu)
+
+## Клиент возвращается к хосту: несколько попыток с паузой. Хост, увидев его,
+## пришлёт партию заново (send_resync), и игра продолжится с того же места.
+func _try_reconnect() -> void:
+	var attempts := 8
+	for i in attempts:
+		if lan == null or lan.connected:
+			return
+		await get_tree().create_timer(2.0).timeout
+		if lan == null or lan.connected or state.is_empty() and d_state.is_empty():
+			return
+		lan.join(lan.last_address)
+	if lan != null and not lan.connected:
+		_show_result("СВЯЗЬ ПОТЕРЯНА", "Вернуться не удалось. Соперник ушёл или сеть пропала.",
+			"В меню", _show_menu)
 
 func _on_lan_left() -> void:
 	# сами уже вышли (встречное «вышел») или партия не сетевая — просто прибрать

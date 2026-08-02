@@ -13,9 +13,9 @@ signal pressed(die_view: DieView)
 const SHADER_PATH := "res://assets/shaders/die.gdshader"
 ## Щит рисуем картинкой, а не эмодзи и не рамкой: рамка по контуру куба читалась
 ## как наклеенная деталь, а мелкий значок 🛡 в углу терялся.
-## Рисованные пиктограммы способностей забракованы владельцем проекта: «это ужас,
-## верни». Возвращены эмодзи-значки, а щиту оставлена его картинка — она устроила.
-const SHIELD_ART := "res://assets/icons/icon_shield.png"
+## Все способности показываются одним и тем же значком в углу грани — так было
+## изначально и так владельцу нравится. Рисованные пиктограммы и картинку щита
+## забраковали: «это ужас, верни».
 
 var value: int = 1
 var type_id: String = "basic"
@@ -36,7 +36,6 @@ var _mat: ShaderMaterial
 var _value_label: Label
 var _badge_label: Label
 var _pips: Control
-var _shield_icon: TextureRect
 
 func _ready() -> void:
 	# mouse_filter здесь не задаём: им управляет clickable, и жёсткая установка
@@ -70,16 +69,6 @@ func _build() -> void:
 	_badge_label.add_theme_constant_override("shadow_offset_y", 1)
 	add_child(_badge_label)
 
-	# щит поверх грани: у него своя картинка, остальным хватает значка
-	_shield_icon = TextureRect.new()
-	_shield_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_shield_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_shield_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	_shield_icon.visible = false
-	if ResourceLoader.exists(SHIELD_ART):
-		_shield_icon.texture = load(SHIELD_ART)
-	add_child(_shield_icon)
-
 	_pips = Control.new()
 	_pips.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_pips)
@@ -110,9 +99,7 @@ func _apply() -> void:
 	_mat.set_shader_parameter("shielded", 1.0 if shield_charges > 0 else 0.0)
 	_value_label.text = str(value)
 	_value_label.add_theme_color_override("font_color", f["ink"])
-	var is_shield := type_id == "shield"
-	_badge_label.text = "" if (is_shield or not show_badge) else String(Rules.TYPES[type_id]["icon"])
-	_shield_icon.visible = show_badge and is_shield
+	_badge_label.text = String(Rules.TYPES[type_id]["icon"]) if show_badge else ""
 	_pips.queue_redraw()
 
 func _sync_size() -> void:
@@ -128,9 +115,6 @@ func _sync_size() -> void:
 	_badge_label.position = Vector2(size.x - bs * 1.35, size.y * 0.06)
 	# щит крупный, в правом верхнем углу грани: он должен читаться и на мелком
 	# кубе в руке, поэтому занимает больше места, чем эмодзи-значок
-	var sh := size.y * 0.38
-	_shield_icon.size = Vector2(sh, sh)
-	_shield_icon.position = Vector2(size.x - sh - size.x * 0.04, size.y * 0.035)
 	_pips.position = Vector2.ZERO
 	_pips.size = size
 	_pips.queue_redraw()
@@ -189,9 +173,10 @@ func _draw_pips() -> void:
 	var r := maxf(2.0, size.y * 0.032)
 	var gap := r * 2.6
 	var total := gap * (Rules.SHIELD_CHARGES - 1)
-	var sh := size.y * 0.38
-	var cx := size.x - sh * 0.5 - size.x * 0.04
-	var cy := size.y * 0.035 + sh * 1.02
+	# заряды под значком щита в правом верхнем углу
+	var badge := size.y * 0.2
+	var cx := size.x - badge * 0.68
+	var cy := size.y * 0.06 + badge * 1.5
 	for i in Rules.SHIELD_CHARGES:
 		var col := Palette.CYAN
 		if i >= shield_charges:

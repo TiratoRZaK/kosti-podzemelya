@@ -24,6 +24,8 @@ signal move_received(seat: String, hand_idx: int, cell_idx: int)
 signal next_round_received
 ## Соперник вышел из партии в меню: ждать его хода или «Ещё раз» больше нечего.
 signal match_left
+## Хост присылает партию заново после переподключения: режим, сид, журнал ходов.
+signal resync_received(mode: String, seed_value: int, log: Array)
 ## Действие Дуракуба: attack/defend по индексу куба в руке, bito/take без индекса.
 signal durak_action_received(seat: String, act: String, hand_idx: int)
 ## Соперник представился: имя его устройства. Нужно, чтобы вместо IP-адреса и
@@ -155,7 +157,11 @@ func _subnet_targets() -> Array:
 				out.append(prefix + str(i))
 	return out
 
+## Адрес хоста запоминаем: после обрыва к нему можно вернуться, не заходя в лобби.
+var last_address := ""
+
 func join(address: String) -> bool:
+	last_address = address
 	stop()
 	_peer = ENetMultiplayerPeer.new()
 	var err := _peer.create_client(address, GAME_PORT)
@@ -283,6 +289,14 @@ func send_next_round() -> void:
 ## вежливо — peer_disconnect_later сперва довозит очередь пакетов (само
 ## сообщение) и только потом рвёт связь. Жёсткий stop() сразу после отправки
 ## терял пакет прямо в очереди — сообщение не доходило, это проверено тестом.
+## Хост отдаёт партию целиком: режим, сид и все сделанные ходы. Клиент собирает
+## её с нуля и повторяет ходы — так связь можно поднять посреди партии, а не
+## начинать заново.
+func send_resync(mode: String, seed_value: int, log: Array) -> void:
+	if not connected:
+		return
+	_remote_resync.rpc(mode, seed_value, log)
+
 func send_leave() -> void:
 	if not connected:
 		return
@@ -335,6 +349,10 @@ func _remote_leave() -> void:
 @rpc("any_peer", "call_remote", "reliable")
 func _remote_durak(seat: String, act: String, hand_idx: int) -> void:
 	durak_action_received.emit(seat, act, hand_idx)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _remote_resync(mode: String, seed_value: int, log: Array) -> void:
+	resync_received.emit(mode, seed_value, log)
 
 @rpc("any_peer", "call_remote", "reliable")
 func _remote_hello(name_of_peer: String) -> void:

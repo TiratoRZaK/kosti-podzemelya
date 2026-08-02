@@ -106,6 +106,8 @@ func run() -> void:
 		"имя=%s" % probe.name)
 	probe.free()
 
+	resync_case()
+
 	durak_case()
 
 	client.close()
@@ -248,3 +250,39 @@ func _board(st: Dictionary) -> String:
 	for cell in st["board"]:
 		out.append("-" if cell == null else "%s%d" % [String(cell["owner"]), int(cell["v"])])
 	return ",".join(out)
+
+## Восстановление партии после обрыва: собираем от того же сида и повторяем
+## журнал ходов. Если состояния разойдутся, вернувшийся игрок увидит другую доску.
+func resync_case() -> void:
+	var seed_value := 24680
+	var host := MatchState.new_match("classic", seed_value, "remote", "p")
+	var rng := MatchState.make_rng(99)
+	var played := 0
+	for step in 9:
+		var seat := String(host["turn"])
+		if MatchState.moves_left(host, seat) <= 0 or not MatchState.has_legal(host, seat):
+			var ev := MatchState.advance(host)
+			if String(ev["event"]) == "round_end":
+				var out := MatchState.close_round(host)
+				if bool(out["match_over"]):
+					break
+				MatchState.new_round(host)
+			continue
+		var mv := Bot.choose_move(host, seat, rng)
+		if mv.is_empty():
+			break
+		MatchState.play(host, seat, int(mv["hand"]), int(mv["cell"]))
+		played += 1
+		var ev2 := MatchState.advance(host)
+		if String(ev2["event"]) == "round_end":
+			var out2 := MatchState.close_round(host)
+			if bool(out2["match_over"]):
+				break
+			MatchState.new_round(host)
+
+	# клиент вернулся: у него только сид, режим и журнал
+	var back := MatchState.replay("classic", seed_value, "remote", "e", "Хост", "Ты", [], host["log"])
+	var same: bool = _board(back) == _board(host) 		and int(back["players"]["p"]["score"]) == int(host["players"]["p"]["score"]) 		and int(back["players"]["e"]["score"]) == int(host["players"]["e"]["score"]) 		and int(back["round"]) == int(host["round"]) 		and String(back["turn"]) == String(host["turn"]) 		and _hand(back, "p") == _hand(host, "p") and _hand(back, "e") == _hand(host, "e")
+	check(same and played >= 6, "партия восстанавливается из сида и журнала ходов",
+		"ходов в журнале=%d | доска %s против %s | ход у %s против %s" % [host["log"].size(),
+			_board(host), _board(back), String(host["turn"]), String(back["turn"])])

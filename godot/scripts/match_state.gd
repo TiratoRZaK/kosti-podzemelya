@@ -136,6 +136,32 @@ static func shuffled(rng: RandomNumberGenerator, arr: Array) -> Array:
 
 # --------------------------------------------------------------- создание
 
+## Восстановить партию по журналу: собираем от того же сида и повторяем ходы.
+## Работает потому, что вся случайность идёт от сида, а ход — это три числа.
+static func replay(mode_key: String, seed_value: int, opponent: String, my_seat: String,
+		foe_name: String, my_name: String, picked: Array, log: Array) -> Dictionary:
+	var st := new_match(mode_key, seed_value, opponent, my_seat, foe_name, my_name, picked)
+	for entry in log:
+		var seat := String(entry[0])
+		# ход мог прийти в конце раунда: доигрываем поток так же, как в живой игре
+		var guard := 0
+		while String(st["turn"]) != seat and guard < 16:
+			guard += 1
+			var ev := advance(st)
+			if String(ev["event"]) == "round_end":
+				var out := close_round(st)
+				if bool(out["match_over"]):
+					return st
+				new_round(st)
+		play(st, seat, int(entry[1]), int(entry[2]))
+		var ev2 := advance(st)
+		if String(ev2["event"]) == "round_end":
+			var out2 := close_round(st)
+			if bool(out2["match_over"]):
+				return st
+			new_round(st)
+	return st
+
 ## picked — колода, набранная игроком на экране драфта. Пустая означает «набрать
 ## случайно»: так партию собирает клиент по сети и кнопка «Добрать случайно».
 static func new_match(mode_key: String, seed_value: int, opponent: String,
@@ -155,7 +181,7 @@ static func new_match(mode_key: String, seed_value: int, opponent: String,
 		"order": order, "players": players,
 		"seats": make_seats(opponent, my_seat, foe_name, my_name),
 		"turn": "p", "first_seat": "p",
-		"round": 0, "history": [], "shown_to": "", "veil": "",
+		"round": 0, "history": [], "log": [], "shown_to": "", "veil": "",
 		"over": false, "outcome": {},
 	}
 	state["rng"] = make_rng(seed_value)
@@ -256,6 +282,10 @@ static func has_legal(state: Dictionary, seat: String) -> bool:
 ## Сделать ход и записать его в историю.
 static func play(state: Dictionary, seat: String, hand_idx: int, cell_idx: int) -> Dictionary:
 	var res := Rules.apply_move(state, seat, hand_idx, cell_idx)
+	# Журнал ходов: сид плюс эта последовательность полностью восстанавливают
+	# партию. Нужен для переподключения по Wi-Fi — иначе после обрыва связи
+	# соперника пришлось бы начинать заново.
+	state["log"].append([seat, hand_idx, cell_idx])
 	state["history"].append({
 		"n": state["history"].size() + 1, "who": seat,
 		"pts": int(res["pts"]), "parts": res["parts"], "mined": bool(res["mined"]),
